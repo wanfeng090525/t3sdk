@@ -55,6 +55,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "T3 验证 SDK ${GITHUB_REF_NAME}" \
+            --generate-notes || true
           gh release upload "${GITHUB_REF_NAME}" \
             versions/c-sdk/t3sdk-c-sdk-android.tar.gz \
             versions/c-sdk/t3sdk-linux-x86_64.so \
@@ -99,6 +102,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "T3 验证 SDK ${GITHUB_REF_NAME}" \
+            --generate-notes || true
           gh release upload "${GITHUB_REF_NAME}" \
             versions/official-cpp/t3sdk-official-cpp-android.tar.gz \
             versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so \
