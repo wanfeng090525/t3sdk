@@ -12,13 +12,9 @@ on:
 permissions:
   contents: write
 
-env:
-  NDK_VERSION: r27
-
 jobs:
-  # ============ 版本A: C SDK (上次版本) ============
-  build-c-sdk:
-    name: 版本A - C SDK
+  build-both-versions:
+    name: 构建两个版本
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -31,7 +27,8 @@ jobs:
           ndk-version: r27
           link-to-sdk: true
 
-      - name: 构建 Android .so (4架构)
+      # ============ 版本A: C SDK (上次版本) ============
+      - name: 版本A - 构建 Android .so (4架构)
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
           cd versions/c-sdk/android
@@ -41,49 +38,14 @@ jobs:
             NDK_APPLICATION_MK=jni/Application.mk
           tar czf ../t3sdk-c-sdk-android.tar.gz libs
 
-      - name: 构建 Linux .so (核心库)
+      - name: 版本A - 构建 Linux .so
         run: |
           cd versions/c-sdk
           gcc -shared -fPIC -O2 -o t3sdk-linux-x86_64.so \
             src/t3sdk.c -I include
 
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: t3sdk-c-sdk
-          path: |
-            versions/c-sdk/t3sdk-c-sdk-android.tar.gz
-            versions/c-sdk/t3sdk-linux-x86_64.so
-
-      - name: 附加到 Release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "T3 验证 SDK ${GITHUB_REF_NAME}" \
-            --generate-notes || true
-          gh release upload "${GITHUB_REF_NAME}" \
-            versions/c-sdk/t3sdk-c-sdk-android.tar.gz \
-            versions/c-sdk/t3sdk-linux-x86_64.so \
-            --clobber
-
-  # ============ 版本B: 官方 C++ SDK (本次版本) ============
-  build-official-cpp:
-    name: 版本B - 官方 C++ SDK
-    runs-on: ubuntu-latest
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 安装 Android NDK
-        id: ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27
-          link-to-sdk: true
-
-      - name: 构建 Android .so (4架构)
+      # ============ 版本B: 官方 C++ SDK (本次版本) ============
+      - name: 版本B - 构建 Android .so (4架构)
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
           cd versions/official-cpp/android
@@ -93,17 +55,27 @@ jobs:
             NDK_APPLICATION_MK=jni/Application.mk
           tar czf ../t3sdk-official-cpp-android.tar.gz libs
 
-      - name: 构建 Linux .so (核心库)
+      - name: 版本B - 构建 Linux .so
         run: |
           cd versions/official-cpp/android/jni
           g++ -std=c++17 -shared -fPIC -O2 -o ../../../t3sdk-official-cpp-linux-x86_64.so \
             t3sdk/t3sdk.cpp -I .
 
+      - name: 校验构建产物
+        run: |
+          echo "=== 构建产物清单 ==="
+          ls -lh versions/c-sdk/t3sdk-c-sdk-android.tar.gz
+          ls -lh versions/c-sdk/t3sdk-linux-x86_64.so
+          ls -lh versions/official-cpp/t3sdk-official-cpp-android.tar.gz
+          ls -lh versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so
+
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: t3sdk-official-cpp
+          name: t3sdk-both-versions
           path: |
+            versions/c-sdk/t3sdk-c-sdk-android.tar.gz
+            versions/c-sdk/t3sdk-linux-x86_64.so
             versions/official-cpp/t3sdk-official-cpp-android.tar.gz
             versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so
 
@@ -116,6 +88,8 @@ jobs:
             --title "T3 验证 SDK ${GITHUB_REF_NAME}" \
             --generate-notes || true
           gh release upload "${GITHUB_REF_NAME}" \
+            versions/c-sdk/t3sdk-c-sdk-android.tar.gz \
+            versions/c-sdk/t3sdk-linux-x86_64.so \
             versions/official-cpp/t3sdk-official-cpp-android.tar.gz \
             versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so \
             --clobber
