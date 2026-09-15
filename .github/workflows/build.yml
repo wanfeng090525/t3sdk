@@ -31,16 +31,16 @@ jobs:
       - name: 版本A - 构建 Android .so (4架构)
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
-          cd versions/c-sdk/android
+          cd "${GITHUB_WORKSPACE}/versions/c-sdk/android"
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=jni/Android.mk \
             NDK_APPLICATION_MK=jni/Application.mk
-          tar czf ../t3sdk-c-sdk-android.tar.gz libs
+          tar czf "${GITHUB_WORKSPACE}/versions/c-sdk/t3sdk-c-sdk-android.tar.gz" libs
 
       - name: 版本A - 构建 Linux .so
         run: |
-          cd versions/c-sdk
+          cd "${GITHUB_WORKSPACE}/versions/c-sdk"
           gcc -shared -fPIC -O2 -o t3sdk-linux-x86_64.so \
             src/t3sdk.c -I include
 
@@ -48,18 +48,22 @@ jobs:
       - name: 版本B - 构建 Android .so (4架构)
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
-          cd versions/official-cpp/android
+          cd "${GITHUB_WORKSPACE}/versions/official-cpp/android"
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=jni/Android.mk \
             NDK_APPLICATION_MK=jni/Application.mk
-          tar czf ../t3sdk-official-cpp-android.tar.gz libs
+          tar czf "${GITHUB_WORKSPACE}/versions/official-cpp/t3sdk-official-cpp-android.tar.gz" libs
 
       - name: 版本B - 构建 Linux .so
         run: |
-          cd versions/official-cpp/android/jni
-          g++ -std=c++17 -shared -fPIC -O2 -o ../../../t3sdk-official-cpp-linux-x86_64.so \
+          set -x
+          cd "${GITHUB_WORKSPACE}/versions/official-cpp/android/jni"
+          g++ -std=c++17 -shared -fPIC -O2 -o "${GITHUB_WORKSPACE}/versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so" \
             t3sdk/t3sdk.cpp -I .
+          echo "GXX_EXIT=$?"
+          ls -la "${GITHUB_WORKSPACE}/versions/official-cpp/"
+          find "${GITHUB_WORKSPACE}/versions/official-cpp" -name "*.so" -ls
 
       - name: 校验构建产物
         run: |
