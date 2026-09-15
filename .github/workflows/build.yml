@@ -1,190 +1,105 @@
-name: Build T3 SDK
+name: 构建两个版本 T3 SDK
 
+# 触发方式:
+# 1. 手动: Actions 页面 -> Run workflow
+# 2. 推送 tag: git tag v3.0.0 && git push origin v3.0.0
 on:
-  push:
-    branches: [ master, main ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ master, main ]
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: r27
 
 jobs:
-  # ========== Linux 构建 ==========
-  linux:
-    name: Linux x86_64
+  # ============ 版本A: C SDK (上次版本) ============
+  build-c-sdk:
+    name: 版本A - C SDK
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y gcc make
+      - name: 安装 Android NDK
+        uses: android-actions/setup-android@v3
 
-      - name: Build shared library
-        run: make shared
-
-      - name: Build static library
-        run: make static
-
-      - name: Build test program
-        run: make test
-
-      - name: Verify build artifacts
+      - name: 构建 Android .so (4架构)
         run: |
-          echo "=== 构建产物 ==="
-          ls -lh build/
-          echo ""
-          echo "=== 导出符号数量 ==="
-          nm -D build/libt3sdk.so 2>/dev/null | grep " T " | wc -l
-          echo ""
-          echo "=== 文件类型 ==="
-          file build/libt3sdk.so build/libt3sdk.a
-
-      - name: Package Linux SDK
-        run: |
-          rm -rf dist/t3sdk-linux
-          mkdir -p dist/t3sdk-linux/include dist/t3sdk-linux/lib
-          cp include/t3sdk.h dist/t3sdk-linux/include/
-          cp build/libt3sdk.so build/libt3sdk.a dist/t3sdk-linux/lib/
-          cp test/test.c dist/t3sdk-linux/
-          cp Makefile dist/t3sdk-linux/
-          cat > dist/t3sdk-linux/README.txt << 'EOF'
-          T3 网络验证 SDK - Linux x86_64
-          ================================
-          文件:
-            include/t3sdk.h  - 头文件
-            lib/libt3sdk.so  - 动态库
-            lib/libt3sdk.a   - 静态库
-            test.c           - 示例代码
-            Makefile         - 编译脚本
-
-          编译示例:
-            gcc -Iinclude test.c -Llib -lt3sdk -o test
-            LD_LIBRARY_PATH=lib ./test
-          EOF
-          cd dist && tar -czf t3sdk-linux-x86_64.tar.gz t3sdk-linux/
-          ls -lh t3sdk-linux-x86_64.tar.gz
-
-      - name: Upload Linux SDK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: t3sdk-linux-x86_64
-          path: dist/t3sdk-linux-x86_64.tar.gz
-          retention-days: 30
-
-  # ========== Android 构建 ==========
-  android:
-    name: Android (4 ABI)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android NDK
-        id: ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27
-          link-to-sdk: true
-
-      - name: Build Android .so (all ABIs)
-        working-directory: android
-        run: |
-          export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
+          cd versions/c-sdk/android
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=jni/Android.mk \
             NDK_APPLICATION_MK=jni/Application.mk
+          tar czf ../t3sdk-c-sdk-android.tar.gz libs
 
-      - name: Verify Android build artifacts
+      - name: 构建 Linux .so (核心库)
         run: |
-          echo "=== Android .so 产物 ==="
-          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-            f="android/libs/$abi/libt3sdk.so"
-            if [ -f "$f" ]; then
-              printf "%-15s %s\n" "$abi:" "$(ls -lh $f | awk '{print $5}') $(file $f | cut -d, -f1)"
-            fi
-          done
-          echo ""
-          echo "=== JNI 符号 (arm64-v8a) ==="
-          nm -D android/libs/arm64-v8a/libt3sdk.so 2>/dev/null | grep "Java_com" | wc -l
+          cd versions/c-sdk
+          gcc -shared -fPIC -O2 -o t3sdk-linux-x86_64.so \
+            src/t3sdk.c -I include
 
-      - name: Package Android SDK
-        run: |
-          rm -rf dist/t3sdk-android
-          mkdir -p dist/t3sdk-android/jniLibs
-          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-            mkdir -p dist/t3sdk-android/jniLibs/$abi
-            cp android/libs/$abi/libt3sdk.so dist/t3sdk-android/jniLibs/$abi/
-          done
-          cp -r java dist/t3sdk-android/java
-          cp android/jni/Android.mk android/jni/Application.mk dist/t3sdk-android/
-          cat > dist/t3sdk-android/README.txt << 'EOF'
-          T3 网络验证 SDK - Android
-          ==========================
-          目录:
-            jniLibs/   - 各架构 .so (复制到 app/src/main/jniLibs/)
-            java/      - Java 包装类 (复制到 app/src/main/java/)
-            Android.mk - NDK 构建脚本
-
-          使用:
-            1. 复制 jniLibs/ 到 app/src/main/jniLibs/
-            2. 复制 java/com/ 到 app/src/main/java/
-            3. AndroidManifest.xml 添加:
-               <uses-permission android:name="android.permission.INTERNET" />
-            4. 代码:
-               T3Verify t3 = new T3Verify();
-               t3.init(loginCode, noticeCode, versionCode, heartbeatCode, appkey, base64Charset);
-               String imei = T3Verify.getMachineCode();
-               T3LoginResult r = t3.login(kami, imei);
-               t3.destroy();
-          EOF
-          cd dist && tar -czf t3sdk-android.tar.gz t3sdk-android/
-          ls -lh t3sdk-android.tar.gz
-
-      - name: Upload Android SDK artifact
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: t3sdk-android
-          path: dist/t3sdk-android.tar.gz
-          retention-days: 30
+          name: t3sdk-c-sdk
+          path: |
+            versions/c-sdk/t3sdk-c-sdk-android.tar.gz
+            versions/c-sdk/t3sdk-linux-x86_64.so
 
-  # ========== 打 Tag 时自动发布 Release ==========
-  release:
-    name: Create Release
-    needs: [linux, android]
-    if: startsWith(github.ref, 'refs/tags/v')
+      - name: 附加到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            versions/c-sdk/t3sdk-c-sdk-android.tar.gz \
+            versions/c-sdk/t3sdk-linux-x86_64.so \
+            --clobber
+
+  # ============ 版本B: 官方 C++ SDK (本次版本) ============
+  build-official-cpp:
+    name: 版本B - 官方 C++ SDK
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
     steps:
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: t3sdk-linux-x86_64
-          path: release/
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-      - name: Download Android artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: t3sdk-android
-          path: release/
+      - name: 安装 Android NDK
+        uses: android-actions/setup-android@v3
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: 构建 Android .so (4架构)
+        run: |
+          cd versions/official-cpp/android
+          $ANDROID_NDK_HOME/ndk-build \
+            NDK_PROJECT_PATH=. \
+            APP_BUILD_SCRIPT=jni/Android.mk \
+            NDK_APPLICATION_MK=jni/Application.mk
+          tar czf ../t3sdk-official-cpp-android.tar.gz libs
+
+      - name: 构建 Linux .so (核心库)
+        run: |
+          cd versions/official-cpp/android/jni
+          g++ -std=c++17 -shared -fPIC -O2 -o ../../../t3sdk-official-cpp-linux-x86_64.so \
+            t3sdk/t3sdk.cpp -I .
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
         with:
-          name: T3 验证 SDK ${{ github.ref_name }}
-          generate_release_notes: true
-          files: |
-            release/t3sdk-linux-x86_64.tar.gz
-            release/t3sdk-android.tar.gz
+          name: t3sdk-official-cpp
+          path: |
+            versions/official-cpp/t3sdk-official-cpp-android.tar.gz
+            versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so
+
+      - name: 附加到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            versions/official-cpp/t3sdk-official-cpp-android.tar.gz \
+            versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so \
+            --clobber
