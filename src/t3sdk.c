@@ -1541,7 +1541,10 @@ int t3verify_login(T3Verify *verify, const char *kami, const char *imei, T3Login
     
     /* 解析JSON */
     if (json_get_int(decoded, "code", &code) < 0) {
-        strcpy(result->error, "响应不是有效的JSON格式");
+        char dbg[256];
+        snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded);
+        strncpy(result->error, dbg, MAX_ERROR_LEN - 1);
+        result->error[MAX_ERROR_LEN - 1] = '\0';
         return -1;
     }
     
@@ -1659,7 +1662,10 @@ int t3verify_get_notice(T3Verify *verify, T3NoticeResult *result) {
     
     /* 解析JSON */
     if (json_get_int(decoded, "code", &code) < 0) {
-        strcpy(result->error, "响应不是有效的JSON格式");
+        char dbg[256];
+        snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded);
+        strncpy(result->error, dbg, MAX_ERROR_LEN - 1);
+        result->error[MAX_ERROR_LEN - 1] = '\0';
         return -1;
     }
     
@@ -1735,7 +1741,10 @@ int t3verify_get_latest_version(T3Verify *verify, T3VersionResult *result) {
     
     /* 解析JSON */
     if (json_get_int(decoded, "code", &code) < 0) {
-        strcpy(result->error, "响应不是有效的JSON格式");
+        char dbg[256];
+        snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded);
+        strncpy(result->error, dbg, MAX_ERROR_LEN - 1);
+        result->error[MAX_ERROR_LEN - 1] = '\0';
         return -1;
     }
     
@@ -1904,7 +1913,11 @@ static int simple_request(T3Verify *verify, const char *code, const char *code_n
         strcpy(result->error, "响应解码失败"); return -1;
     }
     if (json_get_int(decoded, "code", &code_val) < 0) {
-        strcpy(result->error, "响应不是有效的JSON格式"); return -1;
+        char dbg[256];
+        snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded);
+        strncpy(result->error, dbg, MAX_ERROR_LEN - 1);
+        result->error[MAX_ERROR_LEN - 1] = '\0';
+        return -1;
     }
     if (code_val != 200) {
         if (json_get_string(decoded, "msg", msg, sizeof(msg)) == 0) strncpy(result->error, msg, MAX_ERROR_LEN-1);
@@ -1930,7 +1943,7 @@ int t3verify_query_kami(T3Verify *verify, const char *kami, T3QueryResult *resul
     if (encode_params(verify, keys, values, 2, post_data, sizeof(post_data), s_original, sizeof(s_original)) < 0) { strcpy(result->error, "参数编码失败"); return -1; }
     if (http_post(verify, url, post_data, response, sizeof(response)) < 0) { strcpy(result->error, ALL_SERVERS_UNAVAILABLE); return -1; }
     if (decode_response(verify, response, decoded, sizeof(decoded)) < 0) { strcpy(result->error, "响应解码失败"); return -1; }
-    if (json_get_int(decoded, "code", &code_val) < 0) { strcpy(result->error, "响应不是有效的JSON格式"); return -1; }
+    if (json_get_int(decoded, "code", &code_val) < 0) { char dbg[256]; snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded); strncpy(result->error, dbg, MAX_ERROR_LEN-1); result->error[MAX_ERROR_LEN-1]='\0'; return -1; }
     if (code_val != 200) { char msg[MAX_ERROR_LEN]; if (json_get_string(decoded, "msg", msg, sizeof(msg))==0) strncpy(result->error, msg, MAX_ERROR_LEN-1); else strcpy(result->error, "未知错误"); return -1; }
     result->success = 1;
     json_get_string(decoded, "state", result->state, sizeof(result->state));
@@ -1959,7 +1972,7 @@ int t3verify_check_update(T3Verify *verify, const char *ver, T3UpdateResult *res
     if (encode_params(verify, keys, values, 2, post_data, sizeof(post_data), s_original, sizeof(s_original)) < 0) { strcpy(result->error, "参数编码失败"); return -1; }
     if (http_post(verify, url, post_data, response, sizeof(response)) < 0) { strcpy(result->error, ALL_SERVERS_UNAVAILABLE); return -1; }
     if (decode_response(verify, response, decoded, sizeof(decoded)) < 0) { strcpy(result->error, "响应解码失败"); return -1; }
-    if (json_get_int(decoded, "code", &code_val) < 0) { strcpy(result->error, "响应不是有效的JSON格式"); return -1; }
+    if (json_get_int(decoded, "code", &code_val) < 0) { char dbg[256]; snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded); strncpy(result->error, dbg, MAX_ERROR_LEN-1); result->error[MAX_ERROR_LEN-1]='\0'; return -1; }
     if (code_val == 200) {
         result->success = 1; result->has_update = 1;
         json_get_string(decoded, "ver", result->ver, sizeof(result->ver));
@@ -2000,7 +2013,7 @@ int t3verify_app_sign(T3Verify *verify, const char *autograph, T3AppSignResult *
     if (encode_params(verify, keys, values, 2, post_data, sizeof(post_data), s_original, sizeof(s_original)) < 0) { strcpy(result->error, "参数编码失败"); return -1; }
     if (http_post(verify, url, post_data, response, sizeof(response)) < 0) { strcpy(result->error, ALL_SERVERS_UNAVAILABLE); return -1; }
     if (decode_response(verify, response, decoded, sizeof(decoded)) < 0) { strcpy(result->error, "响应解码失败"); return -1; }
-    if (json_get_int(decoded, "code", &code_val) < 0) { strcpy(result->error, "响应不是有效的JSON格式"); return -1; }
+    if (json_get_int(decoded, "code", &code_val) < 0) { char dbg[256]; snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded); strncpy(result->error, dbg, MAX_ERROR_LEN-1); result->error[MAX_ERROR_LEN-1]='\0'; return -1; }
     if (code_val != 200) { char msg[MAX_ERROR_LEN]; if (json_get_string(decoded, "msg", msg, sizeof(msg))==0) strncpy(result->error, msg, MAX_ERROR_LEN-1); else strcpy(result->error, "未知错误"); return -1; }
     result->success = 1;
     json_get_string(decoded, "msg", result->msg, sizeof(result->msg));
@@ -2033,7 +2046,7 @@ int t3verify_user_login(T3Verify *verify, const char *user, const char *pass, co
     if (encode_params(verify, keys, values, 4, post_data, sizeof(post_data), s_original, sizeof(s_original)) < 0) { strcpy(result->error, "参数编码失败"); return -1; }
     if (http_post(verify, url, post_data, response, sizeof(response)) < 0) { strcpy(result->error, ALL_SERVERS_UNAVAILABLE); return -1; }
     if (decode_response(verify, response, decoded, sizeof(decoded)) < 0) { strcpy(result->error, "响应解码失败"); return -1; }
-    if (json_get_int(decoded, "code", &code_val) < 0) { strcpy(result->error, "响应不是有效的JSON格式"); return -1; }
+    if (json_get_int(decoded, "code", &code_val) < 0) { char dbg[256]; snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded); strncpy(result->error, dbg, MAX_ERROR_LEN-1); result->error[MAX_ERROR_LEN-1]='\0'; return -1; }
     if (code_val != 200) { char msg[MAX_ERROR_LEN]; if (json_get_string(decoded, "msg", msg, sizeof(msg))==0) strncpy(result->error, msg, MAX_ERROR_LEN-1); else strcpy(result->error, "未知错误"); return -1; }
     result->success = 1;
     json_get_string(decoded, "id", result->id, sizeof(result->id));
@@ -2067,7 +2080,7 @@ int t3verify_qq_login(T3Verify *verify, const char *openid, const char *access_t
     if (encode_params(verify, keys, values, 3, post_data, sizeof(post_data), s_original, sizeof(s_original)) < 0) { strcpy(result->error, "参数编码失败"); return -1; }
     if (http_post(verify, url, post_data, response, sizeof(response)) < 0) { strcpy(result->error, ALL_SERVERS_UNAVAILABLE); return -1; }
     if (decode_response(verify, response, decoded, sizeof(decoded)) < 0) { strcpy(result->error, "响应解码失败"); return -1; }
-    if (json_get_int(decoded, "code", &code_val) < 0) { strcpy(result->error, "响应不是有效的JSON格式"); return -1; }
+    if (json_get_int(decoded, "code", &code_val) < 0) { char dbg[256]; snprintf(dbg, sizeof(dbg), "响应不是有效的JSON格式(原始: %.100s)", decoded); strncpy(result->error, dbg, MAX_ERROR_LEN-1); result->error[MAX_ERROR_LEN-1]='\0'; return -1; }
     if (code_val != 200) { char msg[MAX_ERROR_LEN]; if (json_get_string(decoded, "msg", msg, sizeof(msg))==0) strncpy(result->error, msg, MAX_ERROR_LEN-1); else strcpy(result->error, "未知错误"); return -1; }
     result->success = 1;
     json_get_string(decoded, "id", result->id, sizeof(result->id));
