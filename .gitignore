@@ -2,11 +2,13 @@
 build/
 android/libs/
 android/obj/
+dist/
 *.o
 *.so
 *.a
 *.dll
 *.dylib
+*.tar.gz
 
 # IDE
 .idea/
@@ -14,5 +16,7 @@ android/obj/
 *.iml
 .DS_Store
 
-# Official examples (zip files only, keep extracted for reference but don't commit binaries)
-# official-examples/*.zip
+# Official examples extracted (keep zips only)
+official-examples/T3SDK_C/
+official-examples/T3SDK_CPP/
+official-examples/T3Example_AndroidJNI/
