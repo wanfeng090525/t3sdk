@@ -1,12 +1,14 @@
 package com.t3yanzheng.sdk;
 
 /**
- * T3 网络验证 SDK - Android Java 接口
+ * T3 网络验证 SDK - Android Java 接口（精简版）
  *
- * 依赖: libt3sdk.so (放在 jniLibs 目录)
+ * 依赖: libt3sdk.so（官方 T3Example_AndroidJNI 源码编译，放在 jniLibs 目录）
  *
- * 注意: T3 后台凭证（调用码、APPKEY 等）已直接编译在 libt3sdk.so 中，
- *       Java 端无需传递。如需修改凭证，编辑 t3sdk_jni.c 顶部的 T3_* 宏后重新编译 .so。
+ * 说明:
+ * - 所有 T3 后台凭证（调用码/APPKEY/公钥）已直接编译在 libt3sdk.so 中，Java 端无凭证
+ * - 修改凭证: 编辑 android/jni/t3sdk_jni.cpp 顶部的 T3_* 宏后重新编译 .so
+ * - 核心实现: 官方 t3sdk.cpp（仅优化了 Android 机器码获取）
  *
  * 使用示例:
  * <pre>
@@ -34,8 +36,7 @@ public class T3Verify {
     }
 
     /**
-     * 初始化 SDK (Base64 模式)
-     * 凭证已编译在 .so 中，无需传参
+     * 初始化 SDK（RSA 模式，凭证已编译在 .so 中）
      * @return true 成功, false 失败
      */
     public boolean init() {
@@ -43,22 +44,7 @@ public class T3Verify {
     }
 
     /**
-     * 初始化 SDK (RSA 模式)
-     * 凭证和公钥已编译在 .so 中，无需传参
-     */
-    public boolean initRSA() {
-        return nativeInitRSA(nativeHandle);
-    }
-
-    /**
-     * 设置其他接口的调用码
-     */
-    public void setCode(String field, String code) {
-        nativeSetCode(nativeHandle, field, code);
-    }
-
-    /**
-     * 获取机器码 (MAC 地址的 MD5)
+     * 获取机器码（官方实现 + Android 网卡遍历优化）
      */
     public static native String nativeGetMachineCode();
 
@@ -66,78 +52,22 @@ public class T3Verify {
         return nativeGetMachineCode();
     }
 
-    // ===== 卡密验证 =====
-
+    /**
+     * 卡密登录验证
+     * @param kami 卡密
+     * @param imei 机器码
+     */
     public T3LoginResult login(String kami, String imei) {
         return nativeLogin(nativeHandle, kami, imei);
     }
 
-    public T3QueryResult queryKami(String kami) {
-        return nativeQueryKami(nativeHandle, kami);
-    }
-
+    /**
+     * 心跳验证（登录成功后周期性调用）
+     * @param kami 卡密
+     * @param statecode 登录返回的状态码
+     */
     public T3Result heartbeat(String kami, String statecode) {
         return nativeHeartbeat(nativeHandle, kami, statecode);
-    }
-
-    // ===== 数据与内容 =====
-
-    public T3NoticeResult getNotice() {
-        return nativeGetNotice(nativeHandle);
-    }
-
-    public T3VersionResult getLatestVersion() {
-        return nativeGetLatestVersion(nativeHandle);
-    }
-
-    public T3UpdateResult checkUpdate(String ver) {
-        return nativeCheckUpdate(nativeHandle, ver);
-    }
-
-    public T3CloudDocResult getCloudDoc(String token) {
-        return nativeGetCloudDoc(nativeHandle, token);
-    }
-
-    public T3AppSignResult appSign(String autograph) {
-        return nativeAppSign(nativeHandle, autograph);
-    }
-
-    // ===== 用户体系 =====
-
-    public T3Result userRegister(String user, String pass, String email) {
-        return nativeUserRegister(nativeHandle, user, pass, email);
-    }
-
-    public T3LoginResult userLogin(String user, String pass, String imei) {
-        return nativeUserLogin(nativeHandle, user, pass, imei);
-    }
-
-    public T3Result userHeartbeat(String user, String pass, String statecode) {
-        return nativeUserHeartbeat(nativeHandle, user, pass, statecode);
-    }
-
-    public T3Result heartbeatAny(String statecode) {
-        return nativeHeartbeatAny(nativeHandle, statecode);
-    }
-
-    // ===== 设备与安全 =====
-
-    public T3Result unbindKami(String kami, String imei) {
-        return nativeUnbindKami(nativeHandle, kami, imei);
-    }
-
-    public T3Result disableKami(String kami) {
-        return nativeDisableKami(nativeHandle, kami);
-    }
-
-    // ===== 在线数量 =====
-
-    public T3OnlineResult getOnlineKamiCount() {
-        return nativeGetOnlineKamiCount(nativeHandle);
-    }
-
-    public T3OnlineResult getOnlineUserCount() {
-        return nativeGetOnlineUserCount(nativeHandle);
     }
 
     /**
@@ -156,31 +86,11 @@ public class T3Verify {
         super.finalize();
     }
 
-    // ===== Native 方法声明 =====
+    // ===== Native 方法声明（与 libt3sdk.so 导出符号一一对应） =====
 
     private native long nativeCreate();
     private native void nativeDestroy(long handle);
     private native boolean nativeInit(long handle);
-    private native boolean nativeInitRSA(long handle);
-    private native void nativeSetCode(long handle, String field, String code);
-
     private native T3LoginResult nativeLogin(long handle, String kami, String imei);
     private native T3Result nativeHeartbeat(long handle, String kami, String statecode);
-    private native T3QueryResult nativeQueryKami(long handle, String kami);
-    private native T3NoticeResult nativeGetNotice(long handle);
-    private native T3VersionResult nativeGetLatestVersion(long handle);
-    private native T3UpdateResult nativeCheckUpdate(long handle, String ver);
-    private native T3CloudDocResult nativeGetCloudDoc(long handle, String token);
-    private native T3AppSignResult nativeAppSign(long handle, String autograph);
-
-    private native T3Result nativeUserRegister(long handle, String user, String pass, String email);
-    private native T3LoginResult nativeUserLogin(long handle, String user, String pass, String imei);
-    private native T3Result nativeUserHeartbeat(long handle, String user, String pass, String statecode);
-    private native T3Result nativeHeartbeatAny(long handle, String statecode);
-
-    private native T3Result nativeUnbindKami(long handle, String kami, String imei);
-    private native T3Result nativeDisableKami(long handle, String kami);
-
-    private native T3OnlineResult nativeGetOnlineKamiCount(long handle);
-    private native T3OnlineResult nativeGetOnlineUserCount(long handle);
 }

@@ -1,0 +1,47 @@
+Manifest-Version: 1.0
+
+Name: AndroidManifest.xml
+SHA-256-Digest: 415MLdk7iuL2jJ+ginZWO/gNIPF+hdoTxFeL93EdZjQ=
+
+Name: classes.dex
+SHA-256-Digest: EuQskKH69zVcKt02Hvdegi2CzyoRmlNXdKt4UkTbByU=
+
+Name: classes2.dex
+SHA-256-Digest: 5eHl6kvvQCrZCcoF1oKTW6BCQGDwAT3z+uinU0FHTA0=
+
+Name: classes3.dex
+SHA-256-Digest: xT2hwaECgIwjWNODucOwvcGpHg1BVAiDD31WbkK7InY=
+
+Name: classes4.dex
+SHA-256-Digest: NW0Vj3VMEfvpS3aodbR6k13eDr4ejjbg3mxIb7avhac=
+
+Name: classes5.dex
+SHA-256-Digest: mTT+QCVkLNxPASZHXiimMO65/yj7dTJT3vMb8DQmrTk=
+
+Name: classes6.dex
+SHA-256-Digest: JwwBMNsSZwrU/Fp1DAugfYd4SmQbYlr2v7iNG/QRq/g=
+
+Name: res/drawable/ic_launcher_background.xml
+SHA-256-Digest: BI2K2PGRVXdSvjL9dGVqsVD225fQ1CvnL/OhbTQfpmI=
+
+Name: res/drawable/ic_launcher_foreground.xml
+SHA-256-Digest: 34cTMnxxZwr/SE+9XcXDA94yzKk5B4h1kPpkRkJ+F70=
+
+Name: res/layout/activity_main.xml
+SHA-256-Digest: BsEehejoGuK+XlO/9ZLLdo7TcTIDkQJaVTA3zerxdsI=
+
+Name: res/mipmap-anydpi-v26/ic_launcher.xml
+SHA-256-Digest: KxdJ0LDcNHvjXtUwhnskEWl8lNbiFPtd1yA/je0sHQg=
+
+Name: res/mipmap-anydpi-v26/ic_launcher_round.xml
+SHA-256-Digest: KxdJ0LDcNHvjXtUwhnskEWl8lNbiFPtd1yA/je0sHQg=
+
+Name: res/mipmap/ic_launcher.xml
+SHA-256-Digest: 073nCOTVoULnaKg63Ni/UeemETQ5h20tUYXaoNDsny8=
+
+Name: res/mipmap/ic_launcher_round.xml
+SHA-256-Digest: 073nCOTVoULnaKg63Ni/UeemETQ5h20tUYXaoNDsny8=
+
+Name: resources.arsc
+SHA-256-Digest: kWe1wceCG24AYDUCXkkXTD0K02BbtuTDKXCvSgPAmc0=
+
