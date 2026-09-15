@@ -160,8 +160,12 @@ JNIEXPORT void JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeSetCode(
  * Signature: ()Ljava/lang/String;
  */
 JNIEXPORT jstring JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeGetMachineCode(JNIEnv *env, jclass clazz) {
-    char machine_code[64];
-    get_machine_code(machine_code);
+    char machine_code[64] = {0};
+    if (get_machine_code(machine_code) != 0 || strlen(machine_code) == 0) {
+        /* 兜底：获取失败时使用官方默认机器码（00:00:00:00:00:00 的 MD5），
+         * 与官方 C++ 版行为一致，保证机器码永不为空 */
+        md5_string_upper("00:00:00:00:00:00", machine_code);
+    }
     return cstr_to_jstring(env, machine_code);
 }
 

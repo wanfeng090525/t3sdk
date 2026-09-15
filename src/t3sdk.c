@@ -292,7 +292,7 @@ static void md5_string(const char *str, char output[33]) {
 }
 
 /* 计算字符串的MD5哈希(16进制大写) */
-static void md5_string_upper(const char *str, char output[33]) {
+void md5_string_upper(const char *str, char output[33]) {
     MD5_CTX context;
     unsigned char digest[16];
     int i;
@@ -1156,10 +1156,10 @@ int get_machine_code(char *machine_code) {
     }
     
     #elif defined(__APPLE__)
-    /* macOS实现 */
+    /* macOS实现（与官方C++版一致：获取失败时使用默认值，不返回错误） */
     int mib[6];
     size_t len;
-    char *buf;
+    char *buf = NULL;
     unsigned char *ptr;
     struct if_msghdr *ifm;
     struct sockaddr_dl *sdl;
@@ -1171,28 +1171,20 @@ int get_machine_code(char *machine_code) {
     mib[4] = NET_RT_IFLIST;
     
     if ((mib[5] = if_nametoindex("en0")) == 0) {
-        return -1;
+        /* en0 不存在，使用默认值 */
+    } else if (sysctl(mib, 6, NULL, &len, NULL, 0) == 0) {
+        buf = (char *)malloc(len);
+        if (buf != NULL) {
+            if (sysctl(mib, 6, buf, &len, NULL, 0) == 0) {
+                ifm = (struct if_msghdr *)buf;
+                sdl = (struct sockaddr_dl *)(ifm + 1);
+                ptr = (unsigned char *)LLADDR(sdl);
+                snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                        ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
+            }
+            free(buf);
+        }
     }
-    
-    if (sysctl(mib, 6, NULL, &len, NULL, 0) < 0) {
-        return -1;
-    }
-    
-    if ((buf = malloc(len)) == NULL) {
-        return -1;
-    }
-    
-    if (sysctl(mib, 6, buf, &len, NULL, 0) < 0) {
-        free(buf);
-        return -1;
-    }
-    
-    ifm = (struct if_msghdr *)buf;
-    sdl = (struct sockaddr_dl *)(ifm + 1);
-    ptr = (unsigned char *)LLADDR(sdl);
-    snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
-            ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
-    free(buf);
     
     #elif defined(__ANDROID__)
     /* Android 实现：遍历所有网络接口获取 MAC 地址
@@ -1243,32 +1235,38 @@ int get_machine_code(char *machine_code) {
     }
 
     #else
-    /* Linux实现 */
+    /* Linux实现（与官方C++版一致：获取失败时使用默认值，不返回错误） */
     struct ifreq ifr;
     int sock;
-    
+    int mac_ok = 0;
+
     sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        return -1;
-    }
-    
-    strncpy(ifr.ifr_name, "eth0", IFNAMSIZ - 1);
-    if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
-        /* 尝试其他接口 */
-        strncpy(ifr.ifr_name, "ens33", IFNAMSIZ - 1);
+    if (sock >= 0) {
+        strncpy(ifr.ifr_name, "eth0", IFNAMSIZ - 1);
         if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
-            strncpy(ifr.ifr_name, "enp0s3", IFNAMSIZ - 1);
+            /* 尝试其他接口 */
+            strncpy(ifr.ifr_name, "ens33", IFNAMSIZ - 1);
             if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
-                close(sock);
-                return -1;
+                strncpy(ifr.ifr_name, "enp0s3", IFNAMSIZ - 1);
+                if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
+                    /* 全部失败，使用默认值 */
+                } else {
+                    mac_ok = 1;
+                }
+            } else {
+                mac_ok = 1;
             }
+        } else {
+            mac_ok = 1;
         }
+        close(sock);
     }
-    close(sock);
-    
-    unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
-    snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    if (mac_ok) {
+        unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
     #endif
     
     /* 如果获取失败，使用默认值 */

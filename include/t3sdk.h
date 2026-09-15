@@ -177,6 +177,8 @@ typedef struct {
 /* ========== 公共函数 ========== */
 
 int get_machine_code(char *machine_code);
+/* 计算字符串的MD5哈希(16进制大写)，输出33字节缓冲区 */
+void md5_string_upper(const char *str, char output[33]);
 
 /* ========== 初始化 ========== */
 
