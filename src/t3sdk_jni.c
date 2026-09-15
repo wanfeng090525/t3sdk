@@ -10,6 +10,28 @@
 #include <string.h>
 #include "t3sdk.h"
 
+/* ============================================================
+ * T3 后台凭证 - 直接编译进 .so，不在 Java/dex 中出现
+ * 替换为你自己的 T3 后台配置后重新编译 .so 即可
+ * 官网: https://www.t3yanzheng.com
+ * ============================================================ */
+#define T3_LOGIN_CODE     "813B2676E9690C89"    /* 登录调用码 */
+#define T3_NOTICE_CODE    "EC56923E2FD91C99"    /* 公告调用码 */
+#define T3_VERSION_CODE   "EA44543183C3F5D3"    /* 版本调用码 */
+#define T3_HEARTBEAT_CODE "9AB469F061FA45F4"    /* 心跳调用码 */
+#define T3_APPKEY         "d633f5e27c1b107cd2a1f98870787263"  /* APPKEY */
+
+/* Base64 自定义字符集模式（默认） - 64 个字符 */
+#define T3_BASE64_CHARSET "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+/* RSA 模式公钥（如后台使用 RSA 加密则取消注释并填入你的公钥） */
+#define T3_RSA_PUBLIC_KEY "-----BEGIN PUBLIC KEY-----\n" \
+                          "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDAQP0fmaGhF/sEskSVfDALBG2X\n" \
+                          "KFCtn2HjJj0W+LQOL4bQIyg7Dh1lVUnTSodUwehXGloXHthU/c/Aio7xnYJILewg\n" \
+                          "5QVYKjGbbexgO61KIg0AotYxV8KNUOAg8qPVfsQ+hELwJHAOFHfORSn/fZfd2hVg\n" \
+                          "+YfzVfYS6KW/i0imOQIDAQAB\n" \
+                          "-----END PUBLIC KEY-----"
+
 /* ========== 工具函数 ========== */
 
 static char *jstring_to_cstr(JNIEnv *env, jstring jstr) {
@@ -80,53 +102,38 @@ JNIEXPORT void JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeDestroy(JNIEnv *en
 /*
  * Class:     com_t3yanzheng_sdk_T3Verify
  * Method:    nativeInit
- * Signature: (JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z
+ * Signature: (J)Z
+ * 凭证直接编译在 .so 中（见文件顶部 T3_* 宏）
  */
 JNIEXPORT jboolean JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeInit(
-        JNIEnv *env, jobject thiz, jlong handle,
-        jstring login_code, jstring notice_code,
-        jstring version_code, jstring heartbeat_code,
-        jstring appkey, jstring base64_charset) {
+        JNIEnv *env, jobject thiz, jlong handle) {
 
     T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
     if (!verify) return JNI_FALSE;
 
-    char *lc = jstring_to_cstr(env, login_code);
-    char *nc = jstring_to_cstr(env, notice_code);
-    char *vc = jstring_to_cstr(env, version_code);
-    char *hc = jstring_to_cstr(env, heartbeat_code);
-    char *ak = jstring_to_cstr(env, appkey);
-    char *bc = jstring_to_cstr(env, base64_charset);
+    int ret = t3verify_init(verify,
+        T3_LOGIN_CODE, T3_NOTICE_CODE, T3_VERSION_CODE,
+        T3_HEARTBEAT_CODE, T3_APPKEY, T3_BASE64_CHARSET);
 
-    int ret = t3verify_init(verify, lc, nc, vc, hc, ak, bc);
-
-    free(lc); free(nc); free(vc); free(hc); free(ak); free(bc);
     return ret == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 /*
  * Class:     com_t3yanzheng_sdk_T3Verify
  * Method:    nativeInitRSA
+ * Signature: (J)Z
+ * RSA 模式，凭证和公钥直接编译在 .so 中
  */
 JNIEXPORT jboolean JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeInitRSA(
-        JNIEnv *env, jobject thiz, jlong handle,
-        jstring login_code, jstring notice_code,
-        jstring version_code, jstring heartbeat_code,
-        jstring appkey, jstring rsa_public_key) {
+        JNIEnv *env, jobject thiz, jlong handle) {
 
     T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
     if (!verify) return JNI_FALSE;
 
-    char *lc = jstring_to_cstr(env, login_code);
-    char *nc = jstring_to_cstr(env, notice_code);
-    char *vc = jstring_to_cstr(env, version_code);
-    char *hc = jstring_to_cstr(env, heartbeat_code);
-    char *ak = jstring_to_cstr(env, appkey);
-    char *rk = jstring_to_cstr(env, rsa_public_key);
+    int ret = t3verify_init_rsa(verify,
+        T3_LOGIN_CODE, T3_NOTICE_CODE, T3_VERSION_CODE,
+        T3_HEARTBEAT_CODE, T3_APPKEY, T3_RSA_PUBLIC_KEY);
 
-    int ret = t3verify_init_rsa(verify, lc, nc, vc, hc, ak, rk);
-
-    free(lc); free(nc); free(vc); free(hc); free(ak); free(rk);
     return ret == 0 ? JNI_TRUE : JNI_FALSE;
 }
 

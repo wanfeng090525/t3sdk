@@ -2,42 +2,26 @@ package com.t3yanzheng.sdk;
 
 /**
  * T3 验证辅助类
- * 封装 T3 SDK 的初始化、登录、心跳流程
  *
- * 验证核心逻辑全部在 libt3sdk.so 中实现（通过 JNI 调用）。
+ * 验证核心逻辑 + T3 后台凭证全部编译在 libt3sdk.so 中。
+ * 本类只负责调用流程，不包含任何凭证。
  *
- * 注意: 下面的参数为占位符，请替换为你自己的 T3 后台配置。
- *       登录 T3 后台 (https://www.t3yanzheng.com) 创建应用后可获取:
- *       - 登录调用码 (login)
- *       - 公告调用码 (notice)
- *       - 版本调用码 (version)
- *       - 心跳调用码 (heartbeat)
- *       - APPKEY
- *       - 自定义 Base64 字符集 (64 个字符)
+ * 如需修改 T3 后台凭证（调用码/APPKEY 等），
+ * 请编辑 t3sdk_jni.c 顶部的 T3_* 宏定义后重新编译 .so。
  */
 public class T3Helper {
 
-    // ====== 请替换为你的 T3 后台配置 ======
-    private static final String LOGIN_CODE     = "你的登录调用码";
-    private static final String NOTICE_CODE    = "你的公告调用码";
-    private static final String VERSION_CODE   = "你的版本调用码";
-    private static final String HEARTBEAT_CODE = "你的心跳调用码";
-    private static final String APPKEY         = "你的APPKEY";
-    private static final String BASE64_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    // ======================================
-
     /**
-     * 执行卡密验证（核心逻辑在 libt3sdk.so 中）
+     * 执行卡密验证（核心逻辑 + 凭证均在 libt3sdk.so 中）
      * @param kami 卡密
      * @return 验证结果，[0]=成功标志("1"成功/"0"失败), [1]=消息, [2]=statecode(成功时用于心跳)
      */
     public static String[] verify(String kami) {
         T3Verify t3 = new T3Verify();
         try {
-            boolean initOk = t3.init(LOGIN_CODE, NOTICE_CODE, VERSION_CODE,
-                    HEARTBEAT_CODE, APPKEY, BASE64_CHARSET);
+            boolean initOk = t3.init();
             if (!initOk) {
-                return new String[]{"0", "SDK初始化失败，请检查调用码和Base64字符集(必须64字符)", ""};
+                return new String[]{"0", "SDK初始化失败，请检查 .so 中的凭证配置", ""};
             }
 
             if (kami == null || kami.trim().length() == 0) {
@@ -71,8 +55,7 @@ public class T3Helper {
     public static boolean heartbeat(String kami, String statecode) {
         T3Verify t3 = new T3Verify();
         try {
-            t3.init(LOGIN_CODE, NOTICE_CODE, VERSION_CODE,
-                    HEARTBEAT_CODE, APPKEY, BASE64_CHARSET);
+            t3.init();
             T3Result result = t3.heartbeat(kami, statecode);
             return result.success;
         } catch (Throwable t) {

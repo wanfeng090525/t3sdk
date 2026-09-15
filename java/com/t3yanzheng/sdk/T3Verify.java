@@ -5,11 +5,13 @@ package com.t3yanzheng.sdk;
  *
  * 依赖: libt3sdk.so (放在 jniLibs 目录)
  *
+ * 注意: T3 后台凭证（调用码、APPKEY 等）已直接编译在 libt3sdk.so 中，
+ *       Java 端无需传递。如需修改凭证，编辑 t3sdk_jni.c 顶部的 T3_* 宏后重新编译 .so。
+ *
  * 使用示例:
  * <pre>
  *   T3Verify t3 = new T3Verify();
- *   t3.init(loginCode, noticeCode, versionCode, heartbeatCode, appkey, base64Charset);
- *   t3.setCode("query", queryCode);
+ *   t3.init();                              // 凭证已内置在 .so
  *   String imei = T3Verify.getMachineCode();
  *   T3LoginResult r = t3.login(kami, imei);
  *   if (r.success) {
@@ -33,41 +35,23 @@ public class T3Verify {
 
     /**
      * 初始化 SDK (Base64 模式)
-     *
-     * @param loginCode     卡密登录调用码
-     * @param noticeCode    获取公告调用码
-     * @param versionCode   获取版本号调用码
-     * @param heartbeatCode 心跳验证调用码
-     * @param appkey        应用密钥
-     * @param base64Charset 自定义 Base64 字符集 (64 字符)
+     * 凭证已编译在 .so 中，无需传参
      * @return true 成功, false 失败
      */
-    public boolean init(String loginCode, String noticeCode, String versionCode,
-                        String heartbeatCode, String appkey, String base64Charset) {
-        return nativeInit(nativeHandle, loginCode, noticeCode, versionCode,
-                heartbeatCode, appkey, base64Charset);
+    public boolean init() {
+        return nativeInit(nativeHandle);
     }
 
     /**
      * 初始化 SDK (RSA 模式)
+     * 凭证和公钥已编译在 .so 中，无需传参
      */
-    public boolean initRSA(String loginCode, String noticeCode, String versionCode,
-                           String heartbeatCode, String appkey, String rsaPublicKey) {
-        return nativeInitRSA(nativeHandle, loginCode, noticeCode, versionCode,
-                heartbeatCode, appkey, rsaPublicKey);
+    public boolean initRSA() {
+        return nativeInitRSA(nativeHandle);
     }
 
     /**
      * 设置其他接口的调用码
-     *
-     * @param field 字段名: query, register, user_login, user_heartbeat,
-     *              qq_login, bind_qq, change_password, user_cancel, recharge,
-     *              kami_recharge, unbind, ip_unbind, disable, check_update,
-     *              get_variable, modify_variable, modify_core, get_kami_core,
-     *              get_user_core, online_kami, online_user, cloud_doc, app_sign,
-     *              qq_heartbeat, qq_get_variable, qq_get_core, qq_modify_core,
-     *              qq_unbind, heartbeat_any
-     * @param code  调用码
      */
     public void setCode(String field, String code) {
         nativeSetCode(nativeHandle, field, code);
@@ -176,12 +160,8 @@ public class T3Verify {
 
     private native long nativeCreate();
     private native void nativeDestroy(long handle);
-    private native boolean nativeInit(long handle, String loginCode, String noticeCode,
-                                      String versionCode, String heartbeatCode,
-                                      String appkey, String base64Charset);
-    private native boolean nativeInitRSA(long handle, String loginCode, String noticeCode,
-                                         String versionCode, String heartbeatCode,
-                                         String appkey, String rsaPublicKey);
+    private native boolean nativeInit(long handle);
+    private native boolean nativeInitRSA(long handle);
     private native void nativeSetCode(long handle, String field, String code);
 
     private native T3LoginResult nativeLogin(long handle, String kami, String imei);
