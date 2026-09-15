@@ -1,67 +1,74 @@
-# T3 SDK - Shared Library Makefile
-# 编译生成 libt3sdk.so 动态链接库
+# T3 验证 SDK - Makefile
+# 构建 Linux 共享库 (.so) 和静态库 (.a)
+#
+# 用法:
+#   make          - 构建共享库和静态库
+#   make shared   - 仅构建共享库
+#   make static   - 仅构建静态库
+#   make test     - 构建并运行测试程序
+#   make install  - 安装到 /usr/local
+#   make clean    - 清理
 
-CC      ?= gcc
-AR      ?= ar
-CFLAGS  := -Wall -Wextra -fPIC -O2 -Iinclude
-LDFLAGS := -shared
-LIBS    := -lcurl
+CC      = gcc
+CFLAGS  = -Wall -O2 -fPIC -Iinclude
+LDFLAGS = -shared
 
-# 目录结构
-SRCDIR   := src
-INCDIR   := include
-TESTDIR  := test
-BUILDDIR := build
-OBJDIR   := $(BUILDDIR)/obj
+# 平台检测
+UNAME_S := $(shell uname -s)
+ifeq ($(OS),Windows_NT)
+    LIBS = -lws2_32 -liphlpapi
+    EXT  = .dll
+else
+    LIBS =
+    EXT  = .so
+endif
 
-# 源文件
-SRCS := $(wildcard $(SRCDIR)/*.c)
-OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRCS))
+SRC_DIR = src
+INC_DIR = include
+BUILD   = build
+OBJ     = $(BUILD)/obj
 
-# 目标库
-TARGET_SO := $(BUILDDIR)/libt3sdk.so
-TARGET_A  := $(BUILDDIR)/libt3sdk.a
+SRCS    = $(SRC_DIR)/t3sdk.c
+OBJS    = $(OBJ)/t3sdk.o
+TARGET_SO = $(BUILD)/libt3sdk$(EXT)
+TARGET_A  = $(BUILD)/libt3sdk.a
 
-# 测试程序
-TEST_SRC := $(TESTDIR)/test.c
-TEST_BIN := $(BUILDDIR)/test_t3sdk
+.PHONY: all shared static test install clean
 
-.PHONY: all clean test install
+all: shared static
 
-all: $(TARGET_SO) $(TARGET_A)
+$(OBJ):
+	mkdir -p $(OBJ)
 
-# 创建目录
-$(OBJDIR):
-	@mkdir -p $(OBJDIR)
+$(OBJ)/t3sdk.o: $(SRCS) $(INC_DIR)/t3sdk.h | $(OBJ)
+	$(CC) $(CFLAGS) -c $(SRCS) -o $@
 
-$(BUILDDIR):
-	@mkdir -p $(BUILDDIR)
+shared: $(TARGET_SO)
 
-# 编译目标文件
-$(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-# 生成动态库
-$(TARGET_SO): $(OBJS) | $(BUILDDIR)
+$(TARGET_SO): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
-	@echo ">>> 动态库已生成: $@"
+	@echo "共享库已生成: $@"
 
-# 生成静态库
-$(TARGET_A): $(OBJS) | $(BUILDDIR)
-	$(AR) rcs $@ $(OBJS)
-	@echo ">>> 静态库已生成: $@"
+static: $(TARGET_A)
 
-# 编译测试程序
-test: $(TARGET_SO) $(TEST_SRC) | $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $(TEST_BIN) $(TEST_SRC) -L$(BUILDDIR) -lt3sdk $(LIBS) -Wl,-rpath,$(BUILDDIR)
-	@echo ">>> 测试程序已生成: $(TEST_BIN)"
-	@echo ">>> 运行: LD_LIBRARY_PATH=$(BUILDDIR) $(TEST_BIN)"
+$(TARGET_A): $(OBJS)
+	ar rcs $@ $(OBJS)
+	@echo "静态库已生成: $@"
+
+test: $(TARGET_SO)
+	@echo "构建测试程序..."
+	$(CC) -Wall -O2 -I$(INC_DIR) test/test.c -L$(BUILD) -lt3sdk $(LIBS) -o $(BUILD)/test_t3sdk
+	@echo "测试程序已生成: $(BUILD)/test_t3sdk"
+	@echo ""
+	@echo "运行测试 (LD_LIBRARY_PATH=$(BUILD) ./build/test_t3sdk)"
+
+install: $(TARGET_SO) $(TARGET_A)
+	cp $(TARGET_SO) /usr/local/lib/
+	cp $(TARGET_A) /usr/local/lib/
+	cp $(INC_DIR)/t3sdk.h /usr/local/include/
+	ldconfig
+	@echo "安装完成: /usr/local/lib/libt3sdk$(EXT), /usr/local/include/t3sdk.h"
 
 clean:
-	rm -rf $(BUILDDIR)
-
-install: $(TARGET_SO)
-	cp $(TARGET_SO) /usr/local/lib/
-	cp $(INCDIR)/t3sdk.h /usr/local/include/
-	ldconfig
-	@echo ">>> 安装完成"
+	rm -rf $(BUILD)
+	@echo "清理完成"

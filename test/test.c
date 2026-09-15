@@ -1,118 +1,109 @@
-/*
- * T3 SDK 测试程序
- * 演示如何使用 T3 网络验证动态库
+/**
+ * T3 验证 SDK - 测试/示例程序
+ *
+ * 演示如何使用 T3 网络验证 SDK 的 C 语言接口
  */
+
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "t3sdk.h"
 
-static void print_result(const char *func_name, const t3_result_t *result)
-{
-    printf("\n=== %s ===\n", func_name);
-    printf("  success: %d\n", result->success);
-    printf("  code:    %d\n", result->code);
-    printf("  msg:     %s\n", result->msg);
-    if (result->statecode[0])
-        printf("  statecode: %s\n", result->statecode);
-    if (result->token[0])
-        printf("  token:   %s\n", result->token);
-    if (result->end_time[0])
-        printf("  end_time: %s\n", result->end_time);
-    printf("  raw:     %.200s\n", result->raw);
-}
+int main() {
+    T3Verify verify;
+    T3LoginResult login_result;
+    T3NoticeResult notice_result;
+    T3Result result;
+    char machine_code[64];
 
-int main(int argc, char *argv[])
-{
-    printf("T3 网络验证 SDK 测试程序\n");
-    printf("========================\n\n");
+    printf("=== T3 网络验证 SDK 测试程序 ===\n\n");
 
-    /* 1. 创建 SDK 实例 */
-    t3_verify_t *handle = t3_verify_create();
-    if (!handle) {
-        printf("创建 SDK 实例失败！\n");
-        return 1;
+    /* 1. 获取机器码 */
+    if (get_machine_code(machine_code) == 0) {
+        printf("[1] 机器码: %s\n", machine_code);
+    } else {
+        printf("[1] 获取机器码失败\n");
+        strcpy(machine_code, "00000000000000000000000000000000");
     }
 
-    /* 2. 配置 SDK
-     *    请根据后台实际配置修改以下参数
+    /* 2. 初始化 SDK (Base64 模式)
+     *
+     * 参数说明:
+     *   login_code     - 卡密登录调用码 (后台获取)
+     *   notice_code    - 获取公告调用码
+     *   version_code   - 获取版本号调用码
+     *   heartbeat_code - 心跳验证调用码
+     *   appkey         - 应用密钥
+     *   base64_charset - 自定义 Base64 字符集 (64 个字符)
      */
-    t3_config_t config;
-    memset(&config, 0, sizeof(config));
+    const char *login_code     = "你的登录调用码";
+    const char *notice_code    = "你的公告调用码";
+    const char *version_code   = "你的版本调用码";
+    const char *heartbeat_code = "你的心跳调用码";
+    const char *appkey         = "你的APPKEY";
+    const char *base64_charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    /* API 地址 - 替换为你的实际 API 域名 + 接口路径前缀 */
-    strncpy(config.api_url, "http://your-api-domain.com", sizeof(config.api_url) - 1);
-
-    /* APPKEY - 从后台获取 */
-    strncpy(config.appkey, "your_appkey_here", sizeof(config.appkey) - 1);
-
-    /* 加密配置 - 此处示例使用 RC4 + HEX 编码 */
-    config.enc_type = T3_ENC_RC4;
-    config.encode_type = T3_ENC_HEX;
-    config.request_encrypt = 1;   /* 开启请求值加密 */
-    config.response_encrypt = 1;  /* 开启返回值加密 */
-    strncpy(config.rc4_key, "your_rc4_key", sizeof(config.rc4_key) - 1);
-
-    /* 校验配置 */
-    config.timestamp_check = 1;   /* 开启时间戳校验 */
-    config.sign_type = T3_SIGN_REQUEST;  /* 请求签名模式 */
-
-    /* 返回值格式 */
-    config.resp_format = T3_RESP_JSON;
-
-    /* 初始化 */
-    if (t3_verify_init(handle, &config) != 0) {
-        printf("SDK 初始化失败！\n");
-        t3_verify_destroy(handle);
-        return 1;
+    printf("\n[2] 初始化 SDK (Base64 模式)...\n");
+    if (t3verify_init(&verify, login_code, notice_code, version_code,
+                      heartbeat_code, appkey, base64_charset) == 0) {
+        printf("    初始化成功\n");
+    } else {
+        printf("    初始化失败 (调用码或字符集有误)\n");
+        /* 即使失败也继续演示其他功能 */
     }
 
-    printf("SDK 初始化成功\n");
+    /* 3. 设置其他调用码 (可选, 根据后台配置) */
+    printf("\n[3] 设置其他调用码...\n");
+    t3verify_set_code(&verify, "query",        "查询卡密调用码");
+    t3verify_set_code(&verify, "register",     "用户注册调用码");
+    t3verify_set_code(&verify, "user_login",   "用户登录调用码");
+    t3verify_set_code(&verify, "user_heartbeat","用户心跳调用码");
+    t3verify_set_code(&verify, "check_update", "检查更新调用码");
+    t3verify_set_code(&verify, "get_variable", "获取变量调用码");
+    t3verify_set_code(&verify, "online_kami",  "在线卡密调用码");
+    t3verify_set_code(&verify, "online_user",  "在线用户调用码");
+    t3verify_set_code(&verify, "cloud_doc",    "云文档调用码");
+    t3verify_set_code(&verify, "app_sign",     "应用签名调用码");
+    /* ... 其他调用码按需设置 ... */
+    printf("    已设置调用码\n");
 
-    /* 3. 获取机器码 */
-    char imei[64];
-    t3_get_machine_code(imei, sizeof(imei));
-    printf("机器码: %s\n", imei);
+    /* 4. 卡密登录 (需要有效的调用码和卡密) */
+    printf("\n[4] 卡密登录 (kami=测试卡密)...\n");
+    if (t3verify_login(&verify, "测试卡密", machine_code, &login_result) == 0) {
+        printf("    登录成功!\n");
+        printf("    ID: %s\n", login_result.id);
+        printf("    到期时间: %s\n", login_result.end_time);
+        printf("    状态码: %s\n", login_result.statecode);
+        printf("    核心数据: %s\n", login_result.core);
 
-    /* 4. 示例：单码卡密登录 */
-    t3_result_t result;
-    const char *kami = "TEST_KAMI_123456";  /* 替换为实际卡密 */
-
-    printf("\n--- 测试单码卡密登录 ---\n");
-    t3_kami_login(handle, kami, imei, &result);
-    print_result("kami_login", &result);
-
-    if (result.success && result.statecode[0]) {
-        printf("\n--- 测试心跳验证 ---\n");
-        t3_kami_heartbeat(handle, result.statecode, &result);
-        print_result("kami_heartbeat", &result);
+        /* 5. 心跳验证 */
+        printf("\n[5] 心跳验证...\n");
+        if (t3verify_heartbeat(&verify, "测试卡密", login_result.statecode, &result) == 0) {
+            printf("    心跳成功: %s\n", result.msg);
+        } else {
+            printf("    心跳失败: %s\n", result.error);
+        }
+    } else {
+        printf("    登录失败: %s\n", login_result.error);
+        printf("    (提示: 请配置有效的调用码和卡密)\n");
     }
 
-    /* 5. 示例：获取在线卡密数量 */
-    printf("\n--- 测试获取在线卡密数量 ---\n");
-    t3_kami_online_count(handle, &result);
-    print_result("kami_online_count", &result);
+    /* 6. 获取公告 */
+    printf("\n[6] 获取公告...\n");
+    if (t3verify_get_notice(&verify, &notice_result) == 0) {
+        printf("    公告: %s\n", notice_result.notice);
+    } else {
+        printf("    获取公告失败: %s\n", notice_result.error);
+    }
 
-    /* 6. 示例：获取程序公告 */
-    printf("\n--- 测试获取程序公告 ---\n");
-    t3_get_notice(handle, &result);
-    print_result("get_notice", &result);
-
-    /* 7. 示例：获取版本号 */
-    printf("\n--- 测试获取版本号 ---\n");
-    t3_get_version(handle, &result);
-    print_result("get_version", &result);
-
-    /* 8. 示例：用户注册（如需测试用户模式） */
-    /*
-    printf("\n--- 测试用户注册 ---\n");
-    t3_user_register(handle, "testuser", "testpass123", &result);
-    print_result("user_register", &result);
-    */
-
-    /* 9. 清理 */
-    t3_verify_destroy(handle);
-    printf("\n测试完成，SDK 已销毁\n");
+    printf("\n=== 测试完成 ===\n");
+    printf("\n使用说明:\n");
+    printf("  1. 从 T3 后台获取各接口的调用码\n");
+    printf("  2. 获取 APPKEY 和自定义 Base64 字符集\n");
+    printf("  3. 替换上面的占位参数\n");
+    printf("  4. 重新编译运行\n");
+    printf("\nRSA 模式初始化示例:\n");
+    printf("  t3verify_init_rsa(&verify, login_code, notice_code,\n");
+    printf("      version_code, heartbeat_code, appkey, rsa_public_key);\n");
 
     return 0;
 }

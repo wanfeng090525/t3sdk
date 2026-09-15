@@ -1,11 +1,18 @@
-# 编译产物
+# Build artifacts
 build/
+android/libs/
+android/obj/
 *.o
 *.so
 *.a
-*.out
+*.dll
+*.dylib
 
-# 临时文件
-*.tmp
-*.log
-*~
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Official examples (zip files only, keep extracted for reference but don't commit binaries)
+# official-examples/*.zip
