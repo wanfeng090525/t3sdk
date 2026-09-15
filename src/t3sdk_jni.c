@@ -104,6 +104,7 @@ JNIEXPORT void JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeDestroy(JNIEnv *en
  * Method:    nativeInit
  * Signature: (J)Z
  * 凭证直接编译在 .so 中（见文件顶部 T3_* 宏）
+ * 默认使用 RSA 模式（与官方示例 main.c 一致）
  */
 JNIEXPORT jboolean JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeInit(
         JNIEnv *env, jobject thiz, jlong handle) {
@@ -111,9 +112,9 @@ JNIEXPORT jboolean JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeInit(
     T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
     if (!verify) return JNI_FALSE;
 
-    int ret = t3verify_init(verify,
+    int ret = t3verify_init_rsa(verify,
         T3_LOGIN_CODE, T3_NOTICE_CODE, T3_VERSION_CODE,
-        T3_HEARTBEAT_CODE, T3_APPKEY, T3_BASE64_CHARSET);
+        T3_HEARTBEAT_CODE, T3_APPKEY, T3_RSA_PUBLIC_KEY);
 
     return ret == 0 ? JNI_TRUE : JNI_FALSE;
 }
