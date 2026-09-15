@@ -77,6 +77,77 @@ static jobject create_result_object(JNIEnv *env, const char *class_name,
     return obj;
 }
 
+/* ========== 结果对象辅助函数 ========== */
+
+static jobject create_login_result(JNIEnv *env, int ret, const T3LoginResult *result) {
+    jclass cls = (*env)->FindClass(env, "com/t3yanzheng/sdk/T3LoginResult");
+    if (cls == NULL) return NULL;
+    jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "()V");
+    jobject obj = (*env)->NewObject(env, cls, ctor);
+
+    jfieldID f;
+    f = (*env)->GetFieldID(env, cls, "success", "Z");
+    if (f) (*env)->SetBooleanField(env, obj, f, ret == 0 ? JNI_TRUE : JNI_FALSE);
+    f = (*env)->GetFieldID(env, cls, "error", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->error));
+    f = (*env)->GetFieldID(env, cls, "id", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->id));
+    f = (*env)->GetFieldID(env, cls, "endTime", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->end_time));
+    f = (*env)->GetFieldID(env, cls, "statecode", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->statecode));
+    f = (*env)->GetFieldID(env, cls, "recharge", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->recharge));
+    f = (*env)->GetFieldID(env, cls, "useTime", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->use_time));
+    f = (*env)->GetFieldID(env, cls, "amount", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->amount));
+    f = (*env)->GetFieldID(env, cls, "available", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->available));
+    f = (*env)->GetFieldID(env, cls, "imei", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->imei));
+    f = (*env)->GetFieldID(env, cls, "change", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->change));
+    f = (*env)->GetFieldID(env, cls, "core", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->core));
+
+    return obj;
+}
+
+static jobject create_variable_result(JNIEnv *env, int ret, const T3VariableResult *result) {
+    jclass cls = (*env)->FindClass(env, "com/t3yanzheng/sdk/T3VariableResult");
+    if (cls == NULL) return NULL;
+    jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "()V");
+    jobject obj = (*env)->NewObject(env, cls, ctor);
+
+    jfieldID f;
+    f = (*env)->GetFieldID(env, cls, "success", "Z");
+    if (f) (*env)->SetBooleanField(env, obj, f, ret == 0 ? JNI_TRUE : JNI_FALSE);
+    f = (*env)->GetFieldID(env, cls, "error", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->error));
+    f = (*env)->GetFieldID(env, cls, "value", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->value));
+
+    return obj;
+}
+
+static jobject create_core_result(JNIEnv *env, int ret, const T3CoreResult *result) {
+    jclass cls = (*env)->FindClass(env, "com/t3yanzheng/sdk/T3CoreResult");
+    if (cls == NULL) return NULL;
+    jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "()V");
+    jobject obj = (*env)->NewObject(env, cls, ctor);
+
+    jfieldID f;
+    f = (*env)->GetFieldID(env, cls, "success", "Z");
+    if (f) (*env)->SetBooleanField(env, obj, f, ret == 0 ? JNI_TRUE : JNI_FALSE);
+    f = (*env)->GetFieldID(env, cls, "error", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->error));
+    f = (*env)->GetFieldID(env, cls, "core", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->core));
+
+    return obj;
+}
+
 /* ========== Native 方法实现 ========== */
 
 /*
@@ -653,6 +724,505 @@ JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeDisableKami(
     char *k = jstring_to_cstr(env, kami);
     t3verify_disable_kami(verify, k ? k : "", &result);
     free(k);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeQqLogin
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeQqLogin(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring openid, jstring accessToken) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3LoginResult result;
+    memset(&result, 0, sizeof(result));
+
+    char *o = jstring_to_cstr(env, openid);
+    char *a = jstring_to_cstr(env, accessToken);
+
+    int ret = t3verify_qq_login(verify, o ? o : "", a ? a : "", &result);
+    free(o); free(a);
+
+    return create_login_result(env, ret, &result);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeBindQq
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeBindQq(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring user, jstring pass, jstring openid, jstring accessToken) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+    char *o = jstring_to_cstr(env, openid);
+    char *a = jstring_to_cstr(env, accessToken);
+
+    t3verify_bind_qq(verify, u ? u : "", p ? p : "", o ? o : "", a ? a : "", &result);
+    free(u); free(p); free(o); free(a);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeQqHeartbeat
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeQqHeartbeat(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring openid, jstring accessToken, jstring statecode) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *o = jstring_to_cstr(env, openid);
+    char *a = jstring_to_cstr(env, accessToken);
+    char *s = jstring_to_cstr(env, statecode);
+
+    t3verify_qq_heartbeat(verify, o ? o : "", a ? a : "", s ? s : "", &result);
+    free(o); free(a); free(s);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeUnbindQq
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeUnbindQq(
+        JNIEnv *env, jobject thiz, jlong handle, jstring user, jstring pass) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+
+    t3verify_unbind_qq(verify, u ? u : "", p ? p : "", &result);
+    free(u); free(p);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeGetVariableByKami
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeGetVariableByKami(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring kami, jstring valueid, jstring valuename) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3VariableResult result;
+    memset(&result, 0, sizeof(result));
+
+    char *k = jstring_to_cstr(env, kami);
+    char *i = jstring_to_cstr(env, valueid);
+    char *n = jstring_to_cstr(env, valuename);
+
+    int ret = t3verify_get_variable_by_kami(verify, k ? k : "", i ? i : "", n ? n : "", &result);
+    free(k); free(i); free(n);
+
+    return create_variable_result(env, ret, &result);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeGetVariableByUser
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeGetVariableByUser(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring user, jstring pass, jstring valueid, jstring valuename) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3VariableResult result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+    char *i = jstring_to_cstr(env, valueid);
+    char *n = jstring_to_cstr(env, valuename);
+
+    int ret = t3verify_get_variable_by_user(verify, u ? u : "", p ? p : "", i ? i : "", n ? n : "", &result);
+    free(u); free(p); free(i); free(n);
+
+    return create_variable_result(env, ret, &result);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeGetVariableByQq
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeGetVariableByQq(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring openid, jstring accessToken, jstring valueid, jstring valuename) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3VariableResult result;
+    memset(&result, 0, sizeof(result));
+
+    char *o = jstring_to_cstr(env, openid);
+    char *a = jstring_to_cstr(env, accessToken);
+    char *i = jstring_to_cstr(env, valueid);
+    char *n = jstring_to_cstr(env, valuename);
+
+    int ret = t3verify_get_variable_by_qq(verify, o ? o : "", a ? a : "", i ? i : "", n ? n : "", &result);
+    free(o); free(a); free(i); free(n);
+
+    return create_variable_result(env, ret, &result);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeModifyVariableByKami
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeModifyVariableByKami(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring kami, jstring valueid, jstring valuecontent) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *k = jstring_to_cstr(env, kami);
+    char *i = jstring_to_cstr(env, valueid);
+    char *c = jstring_to_cstr(env, valuecontent);
+
+    t3verify_modify_variable_by_kami(verify, k ? k : "", i ? i : "", c ? c : "", &result);
+    free(k); free(i); free(c);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeModifyVariableByUser
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeModifyVariableByUser(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring user, jstring pass, jstring valueid, jstring valuecontent) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+    char *i = jstring_to_cstr(env, valueid);
+    char *c = jstring_to_cstr(env, valuecontent);
+
+    t3verify_modify_variable_by_user(verify, u ? u : "", p ? p : "", i ? i : "", c ? c : "", &result);
+    free(u); free(p); free(i); free(c);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeModifyCoreByKami
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeModifyCoreByKami(
+        JNIEnv *env, jobject thiz, jlong handle, jstring kami, jstring core) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *k = jstring_to_cstr(env, kami);
+    char *c = jstring_to_cstr(env, core);
+
+    t3verify_modify_core_by_kami(verify, k ? k : "", c ? c : "", &result);
+    free(k); free(c);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeModifyCoreByUser
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeModifyCoreByUser(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring user, jstring pass, jstring core) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+    char *c = jstring_to_cstr(env, core);
+
+    t3verify_modify_core_by_user(verify, u ? u : "", p ? p : "", c ? c : "", &result);
+    free(u); free(p); free(c);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeGetCoreByKami
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeGetCoreByKami(
+        JNIEnv *env, jobject thiz, jlong handle, jstring kami) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3CoreResult result;
+    memset(&result, 0, sizeof(result));
+
+    char *k = jstring_to_cstr(env, kami);
+    int ret = t3verify_get_core_by_kami(verify, k ? k : "", &result);
+    free(k);
+
+    return create_core_result(env, ret, &result);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeGetCoreByUser
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeGetCoreByUser(
+        JNIEnv *env, jobject thiz, jlong handle, jstring user, jstring pass) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3CoreResult result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+    int ret = t3verify_get_core_by_user(verify, u ? u : "", p ? p : "", &result);
+    free(u); free(p);
+
+    return create_core_result(env, ret, &result);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeGetUserCoreByQq
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeGetUserCoreByQq(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring openid, jstring accessToken) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3CoreResult result;
+    memset(&result, 0, sizeof(result));
+
+    char *o = jstring_to_cstr(env, openid);
+    char *a = jstring_to_cstr(env, accessToken);
+    int ret = t3verify_get_user_core_by_qq(verify, o ? o : "", a ? a : "", &result);
+    free(o); free(a);
+
+    return create_core_result(env, ret, &result);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeModifyUserCoreByQq
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeModifyUserCoreByQq(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring openid, jstring accessToken, jstring core) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *o = jstring_to_cstr(env, openid);
+    char *a = jstring_to_cstr(env, accessToken);
+    char *c = jstring_to_cstr(env, core);
+
+    t3verify_modify_user_core_by_qq(verify, o ? o : "", a ? a : "", c ? c : "", &result);
+    free(o); free(a); free(c);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeKamiRecharge
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeKamiRecharge(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring targetKami, jstring sourceKami) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *t = jstring_to_cstr(env, targetKami);
+    char *s = jstring_to_cstr(env, sourceKami);
+
+    t3verify_kami_recharge(verify, t ? t : "", s ? s : "", &result);
+    free(t); free(s);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeChangePassword
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeChangePassword(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring user, jstring oldpass, jstring newpass) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *o = jstring_to_cstr(env, oldpass);
+    char *n = jstring_to_cstr(env, newpass);
+
+    t3verify_change_password(verify, u ? u : "", o ? o : "", n ? n : "", &result);
+    free(u); free(o); free(n);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeUserCancel
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeUserCancel(
+        JNIEnv *env, jobject thiz, jlong handle, jstring user, jstring pass) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+
+    t3verify_user_cancel(verify, u ? u : "", p ? p : "", &result);
+    free(u); free(p);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeRecharge
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeRecharge(
+        JNIEnv *env, jobject thiz, jlong handle, jstring user, jstring card) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *c = jstring_to_cstr(env, card);
+
+    t3verify_recharge(verify, u ? u : "", c ? c : "", &result);
+    free(u); free(c);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeUnbindUser
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeUnbindUser(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jstring user, jstring pass, jstring imei) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+    char *i = jstring_to_cstr(env, imei);
+
+    t3verify_unbind_user(verify, u ? u : "", p ? p : "", i ? i : "", &result);
+    free(u); free(p); free(i);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeIpUnbindKami
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeIpUnbindKami(
+        JNIEnv *env, jobject thiz, jlong handle, jstring kami) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *k = jstring_to_cstr(env, kami);
+    t3verify_ip_unbind_kami(verify, k ? k : "", &result);
+    free(k);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeIpUnbindUser
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeIpUnbindUser(
+        JNIEnv *env, jobject thiz, jlong handle, jstring user, jstring pass) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+
+    t3verify_ip_unbind_user(verify, u ? u : "", p ? p : "", &result);
+    free(u); free(p);
+
+    return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
+                                result.success, result.error, result.msg);
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeDisableUser
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeDisableUser(
+        JNIEnv *env, jobject thiz, jlong handle, jstring user, jstring pass) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3Result result;
+    memset(&result, 0, sizeof(result));
+
+    char *u = jstring_to_cstr(env, user);
+    char *p = jstring_to_cstr(env, pass);
+
+    t3verify_disable_user(verify, u ? u : "", p ? p : "", &result);
+    free(u); free(p);
 
     return create_result_object(env, "com/t3yanzheng/sdk/T3Result",
                                 result.success, result.error, result.msg);
