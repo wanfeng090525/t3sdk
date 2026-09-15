@@ -1194,6 +1194,54 @@ int get_machine_code(char *machine_code) {
             ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
     free(buf);
     
+    #elif defined(__ANDROID__)
+    /* Android 实现：遍历所有网络接口获取 MAC 地址
+     * 手机网卡名通常是 wlan0(WiFi)/rmnet0(蜂窝)，与桌面端 eth0/ens33 不同
+     */
+    #include <ifaddrs.h>
+    {
+        struct ifaddrs *ifaddr = NULL;
+        struct ifaddrs *ifa;
+        char best_mac[32] = {0};
+        int best_priority = 999;
+
+        if (getifaddrs(&ifaddr) == 0) {
+            for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                if (ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_PACKET)
+                    continue;
+                if (ifa->ifa_flags & IFF_LOOPBACK)
+                    continue;
+
+                unsigned char *mac = (unsigned char *)ifa->ifa_addr->sa_data;
+                /* 跳过无效 MAC（全 0 或全 FF） */
+                int all_zero = 1, all_ff = 1;
+                int j;
+                for (j = 0; j < 6; j++) {
+                    if (mac[j] != 0) all_zero = 0;
+                    if (mac[j] != 0xFF) all_ff = 0;
+                }
+                if (all_zero || all_ff) continue;
+
+                /* 接口优先级: wlan(0) > eth(1) > rmnet(2) > 其他(3) */
+                int prio = 3;
+                if (strstr(ifa->ifa_name, "wlan")) prio = 0;
+                else if (strstr(ifa->ifa_name, "eth")) prio = 1;
+                else if (strstr(ifa->ifa_name, "rmnet")) prio = 2;
+
+                if (prio < best_priority) {
+                    best_priority = prio;
+                    snprintf(best_mac, sizeof(best_mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                }
+            }
+            freeifaddrs(ifaddr);
+        }
+
+        if (strlen(best_mac) > 0) {
+            snprintf(mac_str, sizeof(mac_str), "%s", best_mac);
+        }
+    }
+
     #else
     /* Linux实现 */
     struct ifreq ifr;
