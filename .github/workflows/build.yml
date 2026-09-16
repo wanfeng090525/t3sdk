@@ -32,11 +32,25 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
           cd "${GITHUB_WORKSPACE}/versions/c-sdk/android"
+          rm -rf libs obj
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=jni/Android.mk \
             NDK_APPLICATION_MK=jni/Application.mk
           tar czf "${GITHUB_WORKSPACE}/versions/c-sdk/t3sdk-c-sdk-android.tar.gz" libs
+
+      - name: 版本A - 校验 Android .so 包含修复代码
+        run: |
+          cd "${GITHUB_WORKSPACE}/versions/c-sdk/android/libs"
+          for arch in arm64-v8a armeabi-v7a x86 x86_64; do
+            python3 -c "
+import sys
+data=open('$arch/libt3sdk.so','rb').read()
+assert b'transfer-encoding: chunked' in data, '缺失 chunked 检测: $arch'
+assert b'content-length:' in data, '缺失 content-length 解析: $arch'
+assert b'0\r\n\r\n' in data, '缺失 dechunk 结束标记: $arch'
+print('$arch OK')"
+          done
 
       - name: 版本A - 构建 Linux .so
         run: |
@@ -49,11 +63,25 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
           cd "${GITHUB_WORKSPACE}/versions/official-cpp/android"
+          rm -rf libs obj
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=jni/Android.mk \
             NDK_APPLICATION_MK=jni/Application.mk
           tar czf "${GITHUB_WORKSPACE}/versions/official-cpp/t3sdk-official-cpp-android.tar.gz" libs
+
+      - name: 版本B - 校验 Android .so 包含修复代码
+        run: |
+          cd "${GITHUB_WORKSPACE}/versions/official-cpp/android/libs"
+          for arch in arm64-v8a armeabi-v7a x86 x86_64; do
+            python3 -c "
+import sys
+data=open('$arch/libt3sdk.so','rb').read()
+assert b'transfer-encoding: chunked' in data, '缺失 chunked 检测: $arch'
+assert b'content-length:' in data, '缺失 content-length 解析: $arch'
+assert b'0\r\n\r\n' in data, '缺失 dechunk 结束标记: $arch'
+print('$arch OK')"
+          done
 
       - name: 版本B - 构建 Linux .so
         run: |
