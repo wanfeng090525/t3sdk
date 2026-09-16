@@ -623,6 +623,9 @@ bool jsonGetInt(const std::string& json, const std::string& key, int& value) {
     if(pos==std::string::npos) return false;
     pos=json.find(':',pos); if(pos==std::string::npos) return false;
     pos++; while(pos<json.size()&&(json[pos]==' '||json[pos]=='\t')) pos++;
+    if(pos>=json.size()) return false;
+    /* 兼容字符串形式的数字：服务器部分接口（如解绑）返回 "code": "200"（字符串） */
+    if(json[pos]=='"') pos++;
     value=atoi(json.c_str()+pos);
     return true;
 }
@@ -657,35 +660,6 @@ bool parseUrl(const std::string& url, URLInfo& info) {
         info.path="/";
     }
     return true;
-}
-
-bool connectWithTimeout(int sock, const struct sockaddr *address, int addressLength, int seconds) {
-    #ifdef _WIN32
-    u_long nonBlocking=1;
-    ioctlsocket(sock,FIONBIO,&nonBlocking);
-    int result=connect(sock,address,addressLength);
-    if(result==SOCKET_ERROR&&WSAGetLastError()!=WSAEWOULDBLOCK){ nonBlocking=0; ioctlsocket(sock,FIONBIO,&nonBlocking); return false; }
-    fd_set writeSet; FD_ZERO(&writeSet); FD_SET(sock,&writeSet);
-    timeval timeout={seconds,0};
-    result=select(0,nullptr,&writeSet,nullptr,&timeout);
-    int socketError=0; int errorLength=sizeof(socketError);
-    if(result>0) getsockopt(sock,SOL_SOCKET,SO_ERROR,(char*)&socketError,&errorLength);
-    nonBlocking=0; ioctlsocket(sock,FIONBIO,&nonBlocking);
-    return result>0&&socketError==0;
-    #else
-    int flags=fcntl(sock,F_GETFL,0);
-    if(flags<0) return false;
-    if(fcntl(sock,F_SETFL,flags|O_NONBLOCK)<0) return false;
-    int result=connect(sock,address,addressLength);
-    if(result<0&&errno!=EINPROGRESS){ fcntl(sock,F_SETFL,flags); return false; }
-    fd_set writeSet; FD_ZERO(&writeSet); FD_SET(sock,&writeSet);
-    timeval timeout={seconds,0};
-    result=select(sock+1,nullptr,&writeSet,nullptr,&timeout);
-    int socketError=0; socklen_t errorLength=sizeof(socketError);
-    if(result>0) getsockopt(sock,SOL_SOCKET,SO_ERROR,&socketError,&errorLength);
-    fcntl(sock,F_SETFL,flags);
-    return result>0&&socketError==0;
-    #endif
 }
 
 /* DNS 缓存：Android 上 gethostbyname 阻塞且无超时，网络差时每次请求可能卡数秒。
@@ -723,58 +697,29 @@ static bool resolveHostCached(const std::string& host, struct in_addr* out) {
     return inet_pton(AF_INET, ipStr, out) == 1;
 }
 
-std::string httpPostRaw(const std::string& url, const std::string& postData) {
-    URLInfo info;
-    if(!parseUrl(url,info)) return "";
-    
-    /* HTTPS降级为HTTP（与C版本一致） */
-    if(info.protocol=="https") info.port=80;
-    
+static bool setNonBlocking(int sock, bool nb) {
     #ifdef _WIN32
-    WSADATA wsa;
-    if(WSAStartup(MAKEWORD(2,2),&wsa)!=0) return "";
+    u_long mode = nb ? 1 : 0;
+    return ioctlsocket(sock, FIONBIO, &mode) == 0;
+    #else
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags < 0) return false;
+    return fcntl(sock, F_SETFL, nb ? (flags | O_NONBLOCK) : flags) == 0;
     #endif
-    
-    int sock=socket(AF_INET,SOCK_STREAM,0);
-    if(sock<0){
-        #ifdef _WIN32
-        WSACleanup();
-        #endif
-        return "";
-    }
+}
 
-    struct sockaddr_in server;
-    server.sin_family=AF_INET;
-    server.sin_port=htons(info.port);
-    /* 使用 DNS 缓存解析，避免每次请求都阻塞在系统解析上 */
-    if(!resolveHostCached(info.host,&server.sin_addr)){
-        #ifdef _WIN32
-        closesocket(sock); WSACleanup();
-        #else
-        close(sock);
-        #endif
-        return "";
-    }
-
-    if(!connectWithTimeout(sock,(struct sockaddr*)&server,sizeof(server),2)){
-        #ifdef _WIN32
-        closesocket(sock); WSACleanup();
-        #else
-        close(sock);
-        #endif
-        return "";
-    }
-
+/* 单连接 HTTP 交换：发送请求并读取完整响应，返回 body（失败返回空串） */
+static std::string httpExchange(int sock, const URLInfo& info, const std::string& postData) {
     #ifdef _WIN32
-    DWORD socketTimeout=5000;
+    DWORD socketTimeout=3000;
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     #else
-    timeval socketTimeout={5,0};
+    timeval socketTimeout={3,0};
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,&socketTimeout,sizeof(socketTimeout));
     #endif
-    
+
     std::ostringstream req;
     req<<"POST "<<info.path<<" HTTP/1.1\r\n"
        <<"Host: "<<info.host<<"\r\n"
@@ -784,29 +729,16 @@ std::string httpPostRaw(const std::string& url, const std::string& postData) {
        <<"\r\n"
        <<postData;
     std::string reqStr=req.str();
-    
-    if(send(sock,reqStr.c_str(),(int)reqStr.size(),0)<0){
-        #ifdef _WIN32
-        closesocket(sock); WSACleanup();
-        #else
-        close(sock);
-        #endif
-        return "";
-    }
-    
+
+    if(send(sock,reqStr.c_str(),(int)reqStr.size(),0)<0) return "";
+
     std::string response;
     char buf[4096];
     int n;
     while((n=recv(sock,buf,sizeof(buf)-1,0))>0){
         buf[n]='\0'; response+=buf;
     }
-    
-    #ifdef _WIN32
-    closesocket(sock); WSACleanup();
-    #else
-    close(sock);
-    #endif
-    
+
     /* 408/5xx 是可切换线路的网络故障 */
     auto lineEnd=response.find("\r\n");
     int status=0;
@@ -821,6 +753,127 @@ std::string httpPostRaw(const std::string& url, const std::string& postData) {
     if(bodyPos!=std::string::npos)
         return response.substr(bodyPos+4);
     return response;
+}
+
+/* 并发探测多台服务器：并行发起非阻塞连接，第一个成功完成请求的立即返回。
+ * 相比串行 2s×N 重试，总耗时≈最快可用服务器的连接+响应时间，心跳/解绑显著提速。 */
+static const int g_max_parallel_conn = 8;
+static const int g_parallel_select_sec = 2;
+static const int g_parallel_select_usec = 500000;
+
+std::string httpPostRawMulti(const std::vector<std::string>& urls,
+                             const std::string& postData,
+                             std::string* successUrl) {
+    if(successUrl) successUrl->clear();
+    if(urls.empty()) return "";
+
+    struct PendingConn {
+        int fd;
+        URLInfo info;
+        std::string url;
+    };
+    PendingConn pend[g_max_parallel_conn];
+    int pendCount=0;
+    fd_set masterSet; FD_ZERO(&masterSet);
+    int maxfd=0;
+
+    #ifdef _WIN32
+    WSADATA wsa;
+    if(WSAStartup(MAKEWORD(2,2),&wsa)!=0) return "";
+    #endif
+
+    for(const auto& u:urls){
+        if(pendCount>=g_max_parallel_conn) break;
+        URLInfo info;
+        if(!parseUrl(u,info)) continue;
+        /* HTTPS降级为HTTP（与C版本一致） */
+        if(info.protocol=="https") info.port=80;
+        int sock=socket(AF_INET,SOCK_STREAM,0);
+        if(sock<0) continue;
+        struct sockaddr_in server;
+        server.sin_family=AF_INET;
+        server.sin_port=htons(info.port);
+        if(!resolveHostCached(info.host,&server.sin_addr)){
+            #ifdef _WIN32
+            closesocket(sock);
+            #else
+            close(sock);
+            #endif
+            continue;
+        }
+        if(!setNonBlocking(sock,true)){
+            #ifdef _WIN32
+            closesocket(sock);
+            #else
+            close(sock);
+            #endif
+            continue;
+        }
+        int r=connect(sock,(struct sockaddr*)&server,sizeof(server));
+        if(r<0
+           #ifdef _WIN32
+           &&WSAGetLastError()!=WSAEWOULDBLOCK
+           #else
+           &&errno!=EINPROGRESS
+           #endif
+        ){
+            #ifdef _WIN32
+            closesocket(sock);
+            #else
+            close(sock);
+            #endif
+            continue;
+        }
+        pend[pendCount].fd=sock;
+        pend[pendCount].info=info;
+        pend[pendCount].url=u;
+        FD_SET(sock,&masterSet);
+        if(sock>maxfd) maxfd=sock;
+        pendCount++;
+    }
+
+    std::string result;
+    if(pendCount>0){
+        /* 等待任意连接建立，总超时 2.5s */
+        timeval tv;
+        tv.tv_sec=g_parallel_select_sec;
+        tv.tv_usec=g_parallel_select_usec;
+        fd_set workSet=masterSet;
+        int ready=select(maxfd+1,nullptr,&workSet,nullptr,&tv);
+        if(ready>0){
+            for(int i=0;i<pendCount;i++){
+                if(!FD_ISSET(pend[i].fd,&workSet)) continue;
+                int sockError=0;
+                #ifdef _WIN32
+                int errorLen=sizeof(sockError);
+                getsockopt(pend[i].fd,SOL_SOCKET,SO_ERROR,(char*)&sockError,&errorLen);
+                #else
+                socklen_t errorLen=sizeof(sockError);
+                getsockopt(pend[i].fd,SOL_SOCKET,SO_ERROR,&sockError,&errorLen);
+                #endif
+                if(sockError!=0) continue;
+                setNonBlocking(pend[i].fd,false);
+                std::string body=httpExchange(pend[i].fd,pend[i].info,postData);
+                if(!body.empty()){
+                    result=body;
+                    if(successUrl) *successUrl=pend[i].url;
+                    break;
+                }
+            }
+        }
+    }
+
+    for(int i=0;i<pendCount;i++){
+        #ifdef _WIN32
+        closesocket(pend[i].fd);
+        #else
+        close(pend[i].fd);
+        #endif
+    }
+    #ifdef _WIN32
+    WSACleanup();
+    #endif
+    return result;
 }
 
 } /* end anonymous namespace */
@@ -1024,12 +1077,12 @@ std::string T3Verify::httpPost(const std::string& url,
     if(!parseUrl(url,original)) throw std::runtime_error("无效的URL");
     std::vector<std::string> candidates={serverUrl_};
     for(const auto& base:serverUrls_) if(base!=serverUrl_) candidates.push_back(base);
-    for(const auto& base:candidates){
-        std::string target=base;
-        if(!target.empty()&&target.back()=='/'&&!original.path.empty()&&original.path.front()=='/') target.pop_back();
-        target+=original.path;
-        std::string response=httpPostRaw(target,postData);
-        if(!response.empty()){ serverUrl_=base; return response; }
+    /* 并发探测所有候选服务器，取最快成功者，避免串行 2s×N 重试导致心跳/解绑过慢 */
+    std::string successUrl;
+    std::string response=httpPostRawMulti(candidates,postData,&successUrl);
+    if(!response.empty()){
+        if(!successUrl.empty()) serverUrl_=successUrl;
+        return response;
     }
     throw std::runtime_error("无法连接到所有T3网络验证服务器，可能是因为您的网络问题或T3网络验证服务器被攻击造成的，建议检查网络或稍后重试");
 }

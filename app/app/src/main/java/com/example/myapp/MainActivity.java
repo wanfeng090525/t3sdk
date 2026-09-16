@@ -355,14 +355,12 @@ public class MainActivity extends Activity {
         // T3 解绑接口要求传入【新】机器码（换绑目标设备），若与当前绑定机器码一致会返回
         // “机器码一样，无需解绑”。这里让用户输入新设备的机器码完成换绑。
         final EditText et = new EditText(this);
-        et.setHint("请输入新设备的机器码");
-        et.setText(imei);
-        et.setSelectAllOnFocus(true);
+        et.setHint("请输入新设备（换绑目标）的机器码");
         et.setSingleLine(true);
 
         AlertDialog.Builder b = new AlertDialog.Builder(this);
         b.setTitle("解绑/换绑卡密");
-        b.setMessage("解绑后卡密将绑定到新机器码，可在新设备登录。\n若新机器码与当前一致，服务器会拒绝解绑。");
+        b.setMessage("解绑后卡密将绑定到新设备机器码，可在新设备登录。\n请先在新设备上查看其机器码（如本页上方机器码）再填入，与当前机器码一致时服务器会拒绝解绑。");
         b.setView(et);
         b.setNegativeButton("取消", null);
         b.setPositiveButton("解绑", (d, w) -> {
