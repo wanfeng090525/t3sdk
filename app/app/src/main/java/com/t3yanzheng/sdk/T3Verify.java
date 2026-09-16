@@ -277,24 +277,24 @@ public class T3Verify {
      * 必须在使用自动登录前调用。
      */
     public void setStoragePath(String path) {
-        nativeSetStoragePath(nativeHandle, path);
+        nativeSetStoragePath(path);
     }
 
     /**
      * 手动保存卡密（一般无需调用，login 成功时 native 已自动保存）
      */
     public void saveCard(String kami) {
-        nativeSaveCard(nativeHandle, kami);
+        nativeSaveCard(kami);
     }
 
     /** 清除本地保存的卡密 */
     public void clearSavedCard() {
-        nativeClearSavedCard(nativeHandle);
+        nativeClearSavedCard();
     }
 
     /** 是否已保存卡密（可作为启动是否自动登录的判断） */
     public boolean hasSavedCard() {
-        return nativeHasSavedCard(nativeHandle);
+        return nativeHasSavedCard();
     }
 
     /**
