@@ -806,7 +806,8 @@ static int set_nonblocking(int sock, int nb) {
 #else
     int flags = fcntl(sock, F_GETFL, 0);
     if (flags < 0) return -1;
-    return fcntl(sock, F_SETFL, nb ? (flags | O_NONBLOCK) : flags) == 0 ? 0 : -1;
+    /* 恢复阻塞时必须清除 O_NONBLOCK，否则 recv 会立刻返回 EAGAIN 导致请求失败 */
+    return fcntl(sock, F_SETFL, nb ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) == 0 ? 0 : -1;
 #endif
 }
 
@@ -819,11 +820,11 @@ static int http_exchange(int sock, const URL_INFO *url_info, const char *post_da
     int status = 0;
 
 #ifdef _WIN32
-    DWORD socket_timeout = 3000;
+    DWORD socket_timeout = 4000;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&socket_timeout, sizeof(socket_timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&socket_timeout, sizeof(socket_timeout));
 #else
-    struct timeval socket_timeout = {3, 0};
+    struct timeval socket_timeout = {4, 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &socket_timeout, sizeof(socket_timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &socket_timeout, sizeof(socket_timeout));
 #endif
@@ -943,9 +944,9 @@ static int http_post_multi(char *urls[], int url_count, const char *post_data,
     }
 
     if (pend_count > 0) {
-        /* 等待任意连接建立，总超时 2.5s */
-        tv.tv_sec = 2;
-        tv.tv_usec = 500000;
+        /* 等待任意连接建立。select 在首个连接完成时立即返回，5s 仅为最坏情况上限 */
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
         work_set = master_set;
         ready = select(maxfd + 1, NULL, &work_set, NULL, &tv);
         if (ready > 0) {

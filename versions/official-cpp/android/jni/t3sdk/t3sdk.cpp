@@ -704,18 +704,19 @@ static bool setNonBlocking(int sock, bool nb) {
     #else
     int flags = fcntl(sock, F_GETFL, 0);
     if (flags < 0) return false;
-    return fcntl(sock, F_SETFL, nb ? (flags | O_NONBLOCK) : flags) == 0;
+    /* 恢复阻塞时必须清除 O_NONBLOCK，否则 recv 会立刻返回 EAGAIN 导致请求失败 */
+    return fcntl(sock, F_SETFL, nb ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) == 0;
     #endif
 }
 
 /* 单连接 HTTP 交换：发送请求并读取完整响应，返回 body（失败返回空串） */
 static std::string httpExchange(int sock, const URLInfo& info, const std::string& postData) {
     #ifdef _WIN32
-    DWORD socketTimeout=3000;
+    DWORD socketTimeout=4000;
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     #else
-    timeval socketTimeout={3,0};
+    timeval socketTimeout={4,0};
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,&socketTimeout,sizeof(socketTimeout));
     #endif
@@ -758,8 +759,8 @@ static std::string httpExchange(int sock, const URLInfo& info, const std::string
 /* 并发探测多台服务器：并行发起非阻塞连接，第一个成功完成请求的立即返回。
  * 相比串行 2s×N 重试，总耗时≈最快可用服务器的连接+响应时间，心跳/解绑显著提速。 */
 static const int g_max_parallel_conn = 8;
-static const int g_parallel_select_sec = 2;
-static const int g_parallel_select_usec = 500000;
+static const int g_parallel_select_sec = 5;
+static const int g_parallel_select_usec = 0;
 
 std::string httpPostRawMulti(const std::vector<std::string>& urls,
                              const std::string& postData,
@@ -834,7 +835,7 @@ std::string httpPostRawMulti(const std::vector<std::string>& urls,
 
     std::string result;
     if(pendCount>0){
-        /* 等待任意连接建立，总超时 2.5s */
+        /* 等待任意连接建立。select 在首个连接完成时立即返回，5s 仅为最坏情况上限 */
         timeval tv;
         tv.tv_sec=g_parallel_select_sec;
         tv.tv_usec=g_parallel_select_usec;
