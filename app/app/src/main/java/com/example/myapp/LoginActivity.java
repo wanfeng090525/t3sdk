@@ -1,6 +1,7 @@
 package com.example.myapp;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -17,7 +18,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.t3yanzheng.sdk.T3LoginResult;
+import com.t3yanzheng.sdk.T3NoticeResult;
+import com.t3yanzheng.sdk.T3Result;
+import com.t3yanzheng.sdk.T3UpdateResult;
 import com.t3yanzheng.sdk.T3Verify;
+import com.t3yanzheng.sdk.T3VersionResult;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -77,6 +82,11 @@ public class LoginActivity extends Activity {
         });
 
         btnLogin.setOnClickListener(v -> doLogin());
+
+        // 更多功能：公告 / 检查更新 / 解绑卡密
+        findViewById(R.id.rowNotice).setOnClickListener(v -> loadNotice());
+        findViewById(R.id.rowUpdate).setOnClickListener(v -> checkUpdate());
+        findViewById(R.id.rowUnbind).setOnClickListener(v -> confirmUnbind());
     }
 
     private void doLogin() {
@@ -107,6 +117,85 @@ public class LoginActivity extends Activity {
                 }
             });
         });
+    }
+
+    // ========== 更多功能：公告 / 检查更新 / 解绑卡密 ==========
+
+    private void loadNotice() {
+        executor.execute(() -> {
+            T3NoticeResult r = t3.getNotice();
+            mainHandler.post(() -> {
+                if (r != null && r.success) {
+                    showDialog("公告", r.notice);
+                } else {
+                    showError(r != null && !TextUtils.isEmpty(r.error) ? r.error : "公告获取失败");
+                }
+            });
+        });
+    }
+
+    private void checkUpdate() {
+        executor.execute(() -> {
+            T3VersionResult ver = t3.getLatestVersion();
+            if (ver == null || !ver.success) {
+                mainHandler.post(() -> showError(ver != null && !TextUtils.isEmpty(ver.error) ? ver.error : "版本查询失败"));
+                return;
+            }
+            T3UpdateResult up = t3.checkUpdate(ver.version);
+            mainHandler.post(() -> {
+                if (up != null && up.success && up.hasUpdate) {
+                    showUpdateDialog(up);
+                } else {
+                    showError("已是最新版本");
+                }
+            });
+        });
+    }
+
+    private void showUpdateDialog(T3UpdateResult up) {
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("发现新版本 " + up.ver);
+        b.setMessage(TextUtils.isEmpty(up.uplog) ? "请前往下载更新" : up.uplog);
+        b.setPositiveButton("确定", (d, w) -> d.dismiss());
+        b.show();
+    }
+
+    private void confirmUnbind() {
+        final String kami = etKami.getText().toString().trim();
+        if (TextUtils.isEmpty(kami)) {
+            showError("请输入要解绑的卡密");
+            return;
+        }
+        if (TextUtils.isEmpty(machineCode)) {
+            showError("机器码获取失败，无法解绑");
+            return;
+        }
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("解绑卡密");
+        b.setMessage("确定要解绑卡密 " + kami + " 吗？解绑后可在其他设备重新绑定。");
+        b.setNegativeButton("取消", null);
+        b.setPositiveButton("解绑", (d, w) -> {
+            executor.execute(() -> {
+                T3Result r = t3.unbindKami(kami, machineCode);
+                mainHandler.post(() -> {
+                    if (r != null && r.success) {
+                        showError("");
+                        Toast.makeText(this, "解绑成功", Toast.LENGTH_SHORT).show();
+                    } else {
+                        showError(r != null && !TextUtils.isEmpty(r.error) ? r.error : "解绑失败");
+                    }
+                });
+            });
+        });
+        b.show();
+    }
+
+    private void showDialog(String title, String msg) {
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle(title);
+        b.setMessage(TextUtils.isEmpty(msg) ? "(无内容)" : msg);
+        b.setPositiveButton("确定", (d, w) -> d.dismiss());
+        b.show();
     }
 
     private void saveLogin(String kami, T3LoginResult r) {

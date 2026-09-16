@@ -11,6 +11,7 @@
     <string name="login_machine_label">本机机器码</string>
     <string name="login_copy">复制</string>
     <string name="login_loading">登录中…</string>
+    <string name="login_more">更多功能</string>
 
     <!-- 主页面 -->
     <string name="main_title">我的</string>
