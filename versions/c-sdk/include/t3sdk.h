@@ -42,6 +42,7 @@ typedef struct {
 typedef struct {
     int success;
     char error[MAX_ERROR_LEN];
+    char kami[MAX_KAMI_LEN];       /* 本次登录使用的卡密（native 自动登录回填） */
     char id[MAX_TOKEN_LEN];
     char end_time[MAX_END_TIME_LEN];
     char statecode[MAX_STATECODE_LEN];

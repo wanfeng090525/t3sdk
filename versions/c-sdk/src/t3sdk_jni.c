@@ -8,6 +8,7 @@
 #include <jni.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "t3sdk.h"
 
 /* ============================================================
@@ -90,6 +91,8 @@ static jobject create_login_result(JNIEnv *env, int ret, const T3LoginResult *re
     if (f) (*env)->SetBooleanField(env, obj, f, ret == 0 ? JNI_TRUE : JNI_FALSE);
     f = (*env)->GetFieldID(env, cls, "error", "Ljava/lang/String;");
     if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->error));
+    f = (*env)->GetFieldID(env, cls, "kami", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->kami));
     f = (*env)->GetFieldID(env, cls, "id", "Ljava/lang/String;");
     if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->id));
     f = (*env)->GetFieldID(env, cls, "endTime", "Ljava/lang/String;");
@@ -112,6 +115,60 @@ static jobject create_login_result(JNIEnv *env, int ret, const T3LoginResult *re
     if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result->core));
 
     return obj;
+}
+
+/* ============================================================
+ * 自动登录（在 .so 内实现，不依赖 Java 业务逻辑）
+ *
+ * 卡密保存到应用私有目录下的 t3_saved_card.dat 文件中：
+ *  - 登录成功时自动写入（nativeLogin 内完成）
+ *  - 自动登录时读取并验证，失败自动清除
+ *  - 机器码在 .so 内获取，Java 端只需 setStoragePath + autoLogin
+ * ============================================================ */
+static char g_storage_dir[1024] = {0};  /* 应用私有目录，由 Java 端传入 */
+static const char *kSavedCardFile = "t3_saved_card.dat";
+
+static void saved_card_path(char *out, size_t size) {
+    out[0] = '\0';
+    if (g_storage_dir[0] == '\0') return;
+    snprintf(out, size, "%s/%s", g_storage_dir, kSavedCardFile);
+}
+
+static void save_card_file(const char *kami) {
+    if (g_storage_dir[0] == '\0' || kami == NULL || kami[0] == '\0') return;
+    char path[1100];
+    saved_card_path(path, sizeof(path));
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fwrite(kami, 1, strlen(kami), f);
+        fclose(f);
+    }
+}
+
+static void load_card_file(char *out, size_t size) {
+    out[0] = '\0';
+    if (g_storage_dir[0] == '\0') return;
+    char path[1100];
+    saved_card_path(path, sizeof(path));
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    size_t n = fread(out, 1, size - 1, f);
+    out[n] = '\0';
+    fclose(f);
+}
+
+static void clear_card_file(void) {
+    if (g_storage_dir[0] == '\0') return;
+    char path[1100];
+    saved_card_path(path, sizeof(path));
+    remove(path);
+}
+
+/* 机器码（与 nativeGetMachineCode 相同逻辑） */
+static void native_get_machine_code(char *out, size_t size) {
+    if (get_machine_code(out) != 0 || strlen(out) == 0) {
+        md5_string_upper("00:00:00:00:00:00", out);
+    }
 }
 
 static jobject create_variable_result(JNIEnv *env, int ret, const T3VariableResult *result) {
@@ -321,6 +378,15 @@ JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeLogin(
 
     int ret = t3verify_login(verify, k ? k : "", i ? i : "", &result);
 
+    /* 回填本次登录使用的卡密（供 Java 端保存/展示） */
+    if (k) {
+        strncpy(result.kami, k, MAX_KAMI_LEN - 1);
+        result.kami[MAX_KAMI_LEN - 1] = '\0';
+    }
+
+    /* 登录成功自动保存卡密，供下次自动登录（.so 内完成） */
+    if (ret == 0 && k && k[0] != '\0') save_card_file(k);
+
     free(k); free(i);
 
     jclass cls = (*env)->FindClass(env, "com/t3yanzheng/sdk/T3LoginResult");
@@ -333,6 +399,8 @@ JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeLogin(
     if (f) (*env)->SetBooleanField(env, obj, f, ret == 0 ? JNI_TRUE : JNI_FALSE);
     f = (*env)->GetFieldID(env, cls, "error", "Ljava/lang/String;");
     if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result.error));
+    f = (*env)->GetFieldID(env, cls, "kami", "Ljava/lang/String;");
+    if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result.kami));
     f = (*env)->GetFieldID(env, cls, "id", "Ljava/lang/String;");
     if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result.id));
     f = (*env)->GetFieldID(env, cls, "endTime", "Ljava/lang/String;");
@@ -355,6 +423,91 @@ JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeLogin(
     if (f) (*env)->SetObjectField(env, obj, f, cstr_to_jstring(env, result.core));
 
     return obj;
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeSetStoragePath
+ * Signature: (JLjava/lang/String;)V
+ * 自动登录 - 设置卡密存储目录（应用私有目录）
+ */
+JNIEXPORT void JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeSetStoragePath(
+        JNIEnv *env, jobject thiz, jlong handle, jstring path) {
+    char *p = jstring_to_cstr(env, path);
+    if (p) {
+        strncpy(g_storage_dir, p, sizeof(g_storage_dir) - 1);
+        g_storage_dir[sizeof(g_storage_dir) - 1] = '\0';
+        free(p);
+    }
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeSaveCard
+ * Signature: (JLjava/lang/String;)V
+ */
+JNIEXPORT void JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeSaveCard(
+        JNIEnv *env, jobject thiz, jlong handle, jstring kami) {
+    char *k = jstring_to_cstr(env, kami);
+    if (k) {
+        save_card_file(k);
+        free(k);
+    }
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeClearSavedCard
+ * Signature: (J)V
+ */
+JNIEXPORT void JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeClearSavedCard(
+        JNIEnv *env, jobject thiz, jlong handle) {
+    clear_card_file();
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeHasSavedCard
+ * Signature: (J)Z
+ */
+JNIEXPORT jboolean JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeHasSavedCard(
+        JNIEnv *env, jobject thiz, jlong handle) {
+    char card[256] = {0};
+    load_card_file(card, sizeof(card));
+    return card[0] == '\0' ? JNI_FALSE : JNI_TRUE;
+}
+
+/*
+ * Class:     com_t3yanzheng_sdk_T3Verify
+ * Method:    nativeAutoLogin
+ * Signature: (J)Lcom/t3yanzheng/sdk/T3LoginResult;
+ * 自动登录（.so 内实现，机器码也在 .so 内获取）
+ */
+JNIEXPORT jobject JNICALL Java_com_t3yanzheng_sdk_T3Verify_nativeAutoLogin(
+        JNIEnv *env, jobject thiz, jlong handle) {
+
+    T3Verify *verify = (T3Verify *)jlong_to_cptr(handle);
+    T3LoginResult result;
+    memset(&result, 0, sizeof(result));
+
+    char card[256] = {0};
+    load_card_file(card, sizeof(card));
+    if (card[0] == '\0') {
+        return create_login_result(env, 1, &result);  /* 无已保存卡密 */
+    }
+    /* 回填本次登录使用的卡密 */
+    strncpy(result.kami, card, MAX_KAMI_LEN - 1);
+    result.kami[MAX_KAMI_LEN - 1] = '\0';
+
+    char machine[64] = {0};
+    native_get_machine_code(machine, sizeof(machine));
+
+    int ret = t3verify_login(verify, card, machine, &result);
+
+    /* 官方自动登录逻辑：失败时清除保存的卡密，下次手动输入 */
+    if (ret != 0) clear_card_file();
+
+    return create_login_result(env, ret, &result);
 }
 
 /*

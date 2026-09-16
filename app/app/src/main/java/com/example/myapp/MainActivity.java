@@ -374,6 +374,8 @@ public class MainActivity extends Activity {
         b.setMessage("确定要退出当前账号吗？");
         b.setNegativeButton("取消", null);
         b.setPositiveButton("退出", (d, w) -> {
+            // 退出登录同时清除 .so 内保存的卡密，下次启动不再自动登录
+            if (t3 != null) t3.clearSavedCard();
             SharedPreferences sp = getSharedPreferences(LoginActivity.PREFS_NAME, MODE_PRIVATE);
             sp.edit().clear().apply();
             backToLogin();

@@ -6,6 +6,7 @@ package com.t3yanzheng.sdk;
 public class T3LoginResult {
     public boolean success;
     public String error;
+    public String kami;      // 本次登录使用的卡密（native 自动登录时回填）
     public String id;
     public String endTime;
     public String statecode;
@@ -20,6 +21,7 @@ public class T3LoginResult {
     public T3LoginResult() {
         this.success = false;
         this.error = "";
+        this.kami = "";
         this.id = "";
         this.endTime = "";
         this.statecode = "";
