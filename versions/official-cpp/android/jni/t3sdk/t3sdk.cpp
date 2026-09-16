@@ -709,7 +709,44 @@ static bool setNonBlocking(int sock, bool nb) {
     #endif
 }
 
-/* 单连接 HTTP 交换：发送请求并读取完整响应，返回 body（失败返回空串） */
+/* 解码 chunked 传输编码的 body，返回还原后的数据（失败返回空串） */
+static std::string dechunk(const std::string& body) {
+    std::string out;
+    size_t pos=0;
+    while(pos<body.size()){
+        auto lineEnd=body.find("\r\n",pos);
+        if(lineEnd==std::string::npos) break;
+        std::string sizeLine=body.substr(pos,lineEnd-pos);
+        /* 去掉分号扩展部分 */
+        auto semi=sizeLine.find(';');
+        if(semi!=std::string::npos) sizeLine=sizeLine.substr(0,semi);
+        /* 解析十六进制块大小 */
+        unsigned int chunkSize=0;
+        bool hasDigit=false;
+        for(char c:sizeLine){
+            int v;
+            if(c>='0'&&c<='9') v=c-'0';
+            else if(c>='a'&&c<='f') v=c-'a'+10;
+            else if(c>='A'&&c<='F') v=c-'A'+10;
+            else break;
+            chunkSize=chunkSize*16+(unsigned int)v;
+            hasDigit=true;
+        }
+        if(!hasDigit) break;
+        pos=lineEnd+2;
+        if(chunkSize==0) break; /* 结束块 */
+        if(pos+chunkSize>body.size()) break;
+        out.append(body,pos,chunkSize);
+        pos+=chunkSize;
+        if(pos+2<=body.size()&&body.compare(pos,2,"\r\n")==0) pos+=2;
+        else break;
+    }
+    return out;
+}
+
+/* 单连接 HTTP 交换：发送请求并读取完整响应，返回 body（失败返回空串）。
+ * 服务器使用 chunked transfer-encoding 且保持连接，必须按块大小或
+ * Content-Length 判断响应是否读完，不能依赖连接关闭。 */
 static std::string httpExchange(int sock, const URLInfo& info, const std::string& postData) {
     #ifdef _WIN32
     DWORD socketTimeout=4000;
@@ -736,8 +773,39 @@ static std::string httpExchange(int sock, const URLInfo& info, const std::string
     std::string response;
     char buf[4096];
     int n;
+    bool chunked=false, seenHeader=false;
+    size_t contentLength=0;
     while((n=recv(sock,buf,sizeof(buf)-1,0))>0){
         buf[n]='\0'; response+=buf;
+        if(!seenHeader){
+            auto hEnd=response.find("\r\n\r\n");
+            if(hEnd!=std::string::npos){
+                seenHeader=true;
+                std::string header=response.substr(0,hEnd);
+                std::string hl=header;
+                std::transform(hl.begin(),hl.end(),hl.begin(),::tolower);
+                if(hl.find("transfer-encoding: chunked")!=std::string::npos){
+                    chunked=true;
+                } else {
+                    size_t clp=hl.find("content-length:");
+                    if(clp!=std::string::npos){
+                        clp+=15;
+                        while(clp<hl.size()&&hl[clp]==' ') clp++;
+                        while(clp<hl.size()&&hl[clp]>='0'&&hl[clp]<='9'){
+                            contentLength=contentLength*10+(size_t)(hl[clp]-'0');
+                            clp++;
+                        }
+                    }
+                }
+            }
+        }
+        if(chunked){
+            /* chunked 结束标记为 "0\r\n\r\n" */
+            if(response.size()>=5&&response.compare(response.size()-5,5,"0\r\n\r\n")==0) break;
+        } else if(contentLength>0){
+            auto hEnd=response.find("\r\n\r\n");
+            if(hEnd!=std::string::npos&&response.size()-hEnd-4>=contentLength) break;
+        }
     }
 
     /* 408/5xx 是可切换线路的网络故障 */
@@ -750,10 +818,12 @@ static std::string httpExchange(int sock, const URLInfo& info, const std::string
     if(status==408||status>=500) return "";
 
     /* 提取HTTP body */
+    std::string body;
     auto bodyPos=response.find("\r\n\r\n");
-    if(bodyPos!=std::string::npos)
-        return response.substr(bodyPos+4);
-    return response;
+    if(bodyPos!=std::string::npos) body=response.substr(bodyPos+4);
+    else body=response;
+    if(chunked) body=dechunk(body);
+    return body;
 }
 
 /* 并发探测多台服务器：并行发起非阻塞连接，第一个成功完成请求的立即返回。
@@ -1032,15 +1102,13 @@ std::string T3Verify::encodeValue(const std::string& value) const {
 }
 
 std::string T3Verify::decodeResponse(const std::string& responseText) const {
-    /* 清理响应 */
+    /* 清理响应（chunked 已在 HTTP 层解码，这里仅兼容旧式"长度\n数据"格式） */
     std::string data=responseText;
     auto nl=data.find('\n');
     if(nl!=std::string::npos) data=data.substr(nl+1);
     /* 去除\r\n */
     std::string clean;
     for(char c:data) if(c!='\r'&&c!='\n') clean+=c;
-    /* 去除末尾的0 */
-    if(!clean.empty()&&clean.back()=='0') clean.pop_back();
     
     if(encodeType_==0) return encoder_->decode(clean);
     else return rsaCrypto_->decryptFromBase64(clean);

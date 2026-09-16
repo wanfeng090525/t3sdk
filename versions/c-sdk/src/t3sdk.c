@@ -811,13 +811,53 @@ static int set_nonblocking(int sock, int nb) {
 #endif
 }
 
-/* 单连接 HTTP 收发：发送请求并读取完整响应，提取 body 写入 response（失败返回 -1） */
+/* 解码 chunked 传输编码的 body，返回还原后的数据（失败返回 -1） */
+static int dechunk(const char *body, char *out, int out_len) {
+    int olen = 0;
+    const char *p = body;
+    while (*p) {
+        const char *line_end = strstr(p, "\r\n");
+        if (!line_end) return -1;
+        /* 解析十六进制块大小（可能带 ; 扩展） */
+        unsigned int chunk_size = 0;
+        const char *s = p;
+        int has_digit = 0;
+        while (s < line_end) {
+            char c = *s;
+            int v;
+            if (c >= '0' && c <= '9') v = c - '0';
+            else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+            else break;
+            chunk_size = chunk_size * 16 + (unsigned int)v;
+            has_digit = 1;
+            s++;
+        }
+        if (!has_digit) return -1;
+        p = line_end + 2;
+        if (chunk_size == 0) return olen; /* 结束块 */
+        if ((unsigned int)olen + chunk_size > (unsigned int)out_len) return -1;
+        memmove(out + olen, p, chunk_size);
+        olen += chunk_size;
+        p += chunk_size;
+        if (strncmp(p, "\r\n", 2) != 0) return -1;
+        p += 2;
+    }
+    return olen;
+}
+
+/* 单连接 HTTP 收发：发送请求并读取完整响应，提取 body 写入 response（失败返回 -1）。
+ * 服务器使用 chunked transfer-encoding 且保持连接，必须按块大小或
+ * Content-Length 判断响应是否读完，不能依赖连接关闭。 */
 static int http_exchange(int sock, const URL_INFO *url_info, const char *post_data,
                          char *response, int response_len) {
     char request[4096];
     int bytes_received, total_received = 0;
     char *body_start;
     int status = 0;
+    int chunked = 0;
+    size_t content_length = 0;
+    int header_done = 0;
 
 #ifdef _WIN32
     DWORD socket_timeout = 4000;
@@ -846,6 +886,38 @@ static int http_exchange(int sock, const URL_INFO *url_info, const char *post_da
                                   response_len - total_received - 1, 0)) > 0) {
         total_received += bytes_received;
         if (total_received >= response_len - 1) break;
+        response[total_received] = '\0';
+
+        if (!header_done) {
+            char *h_end = strstr(response, "\r\n\r\n");
+            if (h_end) {
+                header_done = 1;
+                char header[2048];
+                size_t hlen = (size_t)(h_end - response);
+                if (hlen >= sizeof(header)) hlen = sizeof(header) - 1;
+                memcpy(header, response, hlen);
+                header[hlen] = '\0';
+                if (strstr(header, "transfer-encoding: chunked") ||
+                    strstr(header, "Transfer-Encoding: chunked")) {
+                    chunked = 1;
+                } else {
+                    char *cl = strstr(header, "content-length:");
+                    if (!cl) cl = strstr(header, "Content-Length:");
+                    if (cl) {
+                        cl = strchr(cl, ':') + 1;
+                        while (*cl == ' ' || *cl == '\t') cl++;
+                        content_length = (size_t)strtoul(cl, NULL, 10);
+                    }
+                }
+            }
+        }
+        if (chunked) {
+            /* chunked 结束标记为 "0\r\n\r\n" */
+            if (total_received >= 5 && strcmp(response + total_received - 5, "0\r\n\r\n") == 0) break;
+        } else if (content_length > 0) {
+            char *h_end = strstr(response, "\r\n\r\n");
+            if (h_end && (size_t)(total_received - (h_end + 4 - response)) >= content_length) break;
+        }
     }
     response[total_received] = '\0';
 
@@ -862,6 +934,12 @@ static int http_exchange(int sock, const URL_INFO *url_info, const char *post_da
         memmove(response, body_start, strlen(body_start) + 1);
     }
     if (response[0] == '\0') return -1;
+    if (chunked) {
+        /* 原地解码 chunked（源和目标重叠，dechunk 内部使用 memmove） */
+        int dlen = dechunk(response, response, response_len);
+        if (dlen < 0) return -1;
+        response[dlen] = '\0';
+    }
     return 0;
 }
 
@@ -1565,7 +1643,6 @@ static int decode_response(const T3Verify *verify, const char *response,
     const char *data = response;
     const char *newline;
     char *clean, *s, *d;
-    size_t clen;
     int result;
     
     newline = strchr(response, '\n');
@@ -1576,9 +1653,6 @@ static int decode_response(const T3Verify *verify, const char *response,
     s = clean; d = clean;
     while (*s) { if (*s != '\r' && *s != '\n') *d++ = *s; s++; }
     *d = '\0';
-    
-    clen = strlen(clean);
-    if (clen > 0 && clean[clen - 1] == '0') clean[clen - 1] = '\0';
     
     if (verify->encode_type == 0) {
         /* Base64模式 */
