@@ -688,6 +688,41 @@ bool connectWithTimeout(int sock, const struct sockaddr *address, int addressLen
     #endif
 }
 
+/* DNS 缓存：Android 上 gethostbyname 阻塞且无超时，网络差时每次请求可能卡数秒。
+ * 缓存解析结果（TTL 10 分钟），心跳/登录/解绑等高频请求直接复用 IP，大幅提速。 */
+struct DnsCacheEntry {
+    std::string host;
+    std::string ip;
+    time_t ts;
+};
+
+static const int g_dns_cache_cap = 8;
+static DnsCacheEntry g_dns_cache[8];
+static int g_dns_cache_count = 0;
+static const time_t g_dns_cache_ttl = 600;
+
+static bool resolveHostCached(const std::string& host, struct in_addr* out) {
+    time_t now = time(NULL);
+    for (int i = 0; i < g_dns_cache_count; i++) {
+        if (g_dns_cache[i].host == host) {
+            if (now - g_dns_cache[i].ts < g_dns_cache_ttl) {
+                return inet_pton(AF_INET, g_dns_cache[i].ip.c_str(), out) == 1;
+            }
+            /* 缓存过期，移除后重新解析 */
+            g_dns_cache[i] = g_dns_cache[--g_dns_cache_count];
+            break;
+        }
+    }
+    struct hostent *h = gethostbyname(host.c_str());
+    if (!h) return false;
+    char ipStr[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, h->h_addr, ipStr, sizeof(ipStr))) return false;
+    if (g_dns_cache_count < g_dns_cache_cap) {
+        g_dns_cache[g_dns_cache_count++] = {host, ipStr, now};
+    }
+    return inet_pton(AF_INET, ipStr, out) == 1;
+}
+
 std::string httpPostRaw(const std::string& url, const std::string& postData) {
     URLInfo info;
     if(!parseUrl(url,info)) return "";
@@ -700,14 +735,6 @@ std::string httpPostRaw(const std::string& url, const std::string& postData) {
     if(WSAStartup(MAKEWORD(2,2),&wsa)!=0) return "";
     #endif
     
-    struct hostent *host=gethostbyname(info.host.c_str());
-    if(!host){
-        #ifdef _WIN32
-        WSACleanup();
-        #endif
-        return "";
-    }
-    
     int sock=socket(AF_INET,SOCK_STREAM,0);
     if(sock<0){
         #ifdef _WIN32
@@ -715,13 +742,21 @@ std::string httpPostRaw(const std::string& url, const std::string& postData) {
         #endif
         return "";
     }
-    
+
     struct sockaddr_in server;
     server.sin_family=AF_INET;
     server.sin_port=htons(info.port);
-    memcpy(&server.sin_addr,host->h_addr,host->h_length);
-    
-    if(!connectWithTimeout(sock,(struct sockaddr*)&server,sizeof(server),3)){
+    /* 使用 DNS 缓存解析，避免每次请求都阻塞在系统解析上 */
+    if(!resolveHostCached(info.host,&server.sin_addr)){
+        #ifdef _WIN32
+        closesocket(sock); WSACleanup();
+        #else
+        close(sock);
+        #endif
+        return "";
+    }
+
+    if(!connectWithTimeout(sock,(struct sockaddr*)&server,sizeof(server),2)){
         #ifdef _WIN32
         closesocket(sock); WSACleanup();
         #else
@@ -731,11 +766,11 @@ std::string httpPostRaw(const std::string& url, const std::string& postData) {
     }
 
     #ifdef _WIN32
-    DWORD socketTimeout=7000;
+    DWORD socketTimeout=5000;
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     #else
-    timeval socketTimeout={7,0};
+    timeval socketTimeout={5,0};
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,&socketTimeout,sizeof(socketTimeout));
     #endif

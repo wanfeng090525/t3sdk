@@ -43,6 +43,47 @@ static const char *T3_SERVER_URLS[T3_SERVER_COUNT] = {
     #endif
 #endif
 
+/* ========== DNS 缓存 ==========
+ * 每次请求调用 gethostbyname 会阻塞且无超时，网络差时单次请求可能卡数秒。
+ * 缓存解析结果（TTL 10 分钟），心跳/登录/解绑等高频请求直接复用 IP，大幅提速。
+ */
+#define DNS_CACHE_CAP 8
+#define DNS_CACHE_TTL 600
+
+static struct {
+    char host[256];
+    struct in_addr addr;
+    time_t ts;
+} g_dns_cache[DNS_CACHE_CAP];
+static int g_dns_cache_count = 0;
+
+static int resolve_host_cached(const char *host, struct in_addr *out) {
+    time_t now = time(NULL);
+    int i;
+    for (i = 0; i < g_dns_cache_count; i++) {
+        if (strcmp(g_dns_cache[i].host, host) == 0) {
+            if (now - g_dns_cache[i].ts < DNS_CACHE_TTL) {
+                *out = g_dns_cache[i].addr;
+                return 0;
+            }
+            /* 缓存过期，移除后重新解析 */
+            g_dns_cache[i] = g_dns_cache[--g_dns_cache_count];
+            break;
+        }
+    }
+    struct hostent *h = gethostbyname(host);
+    if (h == NULL) return -1;
+    memcpy(out, h->h_addr, h->h_length);
+    if (g_dns_cache_count < DNS_CACHE_CAP) {
+        strncpy(g_dns_cache[g_dns_cache_count].host, host, 255);
+        g_dns_cache[g_dns_cache_count].host[255] = '\0';
+        g_dns_cache[g_dns_cache_count].addr = *out;
+        g_dns_cache[g_dns_cache_count].ts = now;
+        g_dns_cache_count++;
+    }
+    return 0;
+}
+
 /* ========== MD5算法实现 ========== */
 
 /* MD5上下文 */
@@ -795,7 +836,6 @@ static int connect_with_timeout(int sock, const struct sockaddr *address, int ad
  */
 static int http_post_once(const char *url, const char *post_data, char *response, int response_len) {
     URL_INFO url_info;
-    struct hostent *host;
     struct sockaddr_in server;
     int sock;
     char request[4096];
@@ -824,9 +864,8 @@ static int http_post_once(const char *url, const char *post_data, char *response
         url_info.port = 80;
     }
     
-    /* 获取主机信息 */
-    host = gethostbyname(url_info.host);
-    if (host == NULL) {
+    /* 获取主机信息（带 DNS 缓存，避免每次请求阻塞解析） */
+    if (resolve_host_cached(url_info.host, &server.sin_addr) < 0) {
         #ifdef _WIN32
         WSACleanup();
         #endif
@@ -844,11 +883,11 @@ static int http_post_once(const char *url, const char *post_data, char *response
 
     /* 防止单条线路长时间卡住收发 */
     #ifdef _WIN32
-    DWORD socket_timeout = 7000;
+    DWORD socket_timeout = 5000;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&socket_timeout, sizeof(socket_timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&socket_timeout, sizeof(socket_timeout));
     #else
-    struct timeval socket_timeout = {7, 0};
+    struct timeval socket_timeout = {5, 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &socket_timeout, sizeof(socket_timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &socket_timeout, sizeof(socket_timeout));
     #endif
@@ -856,10 +895,9 @@ static int http_post_once(const char *url, const char *post_data, char *response
     /* 设置服务器地址 */
     server.sin_family = AF_INET;
     server.sin_port = htons(url_info.port);
-    memcpy(&server.sin_addr, host->h_addr, host->h_length);
     
     /* 连接服务器 */
-    if (connect_with_timeout(sock, (struct sockaddr *)&server, sizeof(server), 3) < 0) {
+    if (connect_with_timeout(sock, (struct sockaddr *)&server, sizeof(server), 2) < 0) {
         #ifdef _WIN32
         closesocket(sock);
         WSACleanup();
