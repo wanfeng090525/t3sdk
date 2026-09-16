@@ -333,10 +333,10 @@ public class T3Verify {
     private native void nativeSetCode(long handle, String field, String code);
 
     // ===== 自动登录（.so 内实现：卡密存储/机器码获取/验证都在 native 侧） =====
-    private native void nativeSetStoragePath(long handle, String path);
-    private native void nativeSaveCard(long handle, String kami);
-    private native void nativeClearSavedCard(long handle);
-    private native boolean nativeHasSavedCard(long handle);
+    private native void nativeSetStoragePath(String path);
+    private native void nativeSaveCard(String kami);
+    private native void nativeClearSavedCard();
+    private native boolean nativeHasSavedCard();
     private native T3LoginResult nativeAutoLogin(long handle);
 
     private native T3LoginResult nativeLogin(long handle, String kami, String imei);
