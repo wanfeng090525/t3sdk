@@ -277,24 +277,24 @@ public class T3Verify {
      * 必须在使用自动登录前调用。
      */
     public void setStoragePath(String path) {
-        nativeSetStoragePath(path);
+        nativeSetStoragePath(nativeHandle, path);
     }
 
     /**
      * 手动保存卡密（一般无需调用，login 成功时 native 已自动保存）
      */
     public void saveCard(String kami) {
-        nativeSaveCard(kami);
+        nativeSaveCard(nativeHandle, kami);
     }
 
     /** 清除本地保存的卡密 */
     public void clearSavedCard() {
-        nativeClearSavedCard();
+        nativeClearSavedCard(nativeHandle);
     }
 
     /** 是否已保存卡密（可作为启动是否自动登录的判断） */
     public boolean hasSavedCard() {
-        return nativeHasSavedCard();
+        return nativeHasSavedCard(nativeHandle);
     }
 
     /**
@@ -333,10 +333,10 @@ public class T3Verify {
     private native void nativeSetCode(long handle, String field, String code);
 
     // ===== 自动登录（.so 内实现：卡密存储/机器码获取/验证都在 native 侧） =====
-    private native void nativeSetStoragePath(String path);
-    private native void nativeSaveCard(String kami);
-    private native void nativeClearSavedCard();
-    private native boolean nativeHasSavedCard();
+    private native void nativeSetStoragePath(long handle, String path);
+    private native void nativeSaveCard(long handle, String kami);
+    private native void nativeClearSavedCard(long handle);
+    private native boolean nativeHasSavedCard(long handle);
     private native T3LoginResult nativeAutoLogin(long handle);
 
     private native T3LoginResult nativeLogin(long handle, String kami, String imei);

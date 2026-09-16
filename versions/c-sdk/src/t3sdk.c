@@ -43,47 +43,6 @@ static const char *T3_SERVER_URLS[T3_SERVER_COUNT] = {
     #endif
 #endif
 
-/* ========== DNS 缓存 ==========
- * 每次请求调用 gethostbyname 会阻塞且无超时，网络差时单次请求可能卡数秒。
- * 缓存解析结果（TTL 10 分钟），心跳/登录/解绑等高频请求直接复用 IP，大幅提速。
- */
-#define DNS_CACHE_CAP 8
-#define DNS_CACHE_TTL 600
-
-static struct {
-    char host[256];
-    struct in_addr addr;
-    time_t ts;
-} g_dns_cache[DNS_CACHE_CAP];
-static int g_dns_cache_count = 0;
-
-static int resolve_host_cached(const char *host, struct in_addr *out) {
-    time_t now = time(NULL);
-    int i;
-    for (i = 0; i < g_dns_cache_count; i++) {
-        if (strcmp(g_dns_cache[i].host, host) == 0) {
-            if (now - g_dns_cache[i].ts < DNS_CACHE_TTL) {
-                *out = g_dns_cache[i].addr;
-                return 0;
-            }
-            /* 缓存过期，移除后重新解析 */
-            g_dns_cache[i] = g_dns_cache[--g_dns_cache_count];
-            break;
-        }
-    }
-    struct hostent *h = gethostbyname(host);
-    if (h == NULL) return -1;
-    memcpy(out, h->h_addr, h->h_length);
-    if (g_dns_cache_count < DNS_CACHE_CAP) {
-        strncpy(g_dns_cache[g_dns_cache_count].host, host, 255);
-        g_dns_cache[g_dns_cache_count].host[255] = '\0';
-        g_dns_cache[g_dns_cache_count].addr = *out;
-        g_dns_cache[g_dns_cache_count].ts = now;
-        g_dns_cache_count++;
-    }
-    return 0;
-}
-
 /* ========== MD5算法实现 ========== */
 
 /* MD5上下文 */
@@ -795,80 +754,122 @@ static int parse_url(const char *url, URL_INFO *info) {
     return 0;
 }
 
+static int connect_with_timeout(int sock, const struct sockaddr *address, int address_len, int seconds) {
+    #ifdef _WIN32
+    u_long non_blocking = 1;
+    int result, socket_error = 0, error_len = sizeof(socket_error);
+    fd_set write_set;
+    struct timeval timeout;
+    ioctlsocket(sock, FIONBIO, &non_blocking);
+    result = connect(sock, address, address_len);
+    if (result == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) {
+        non_blocking = 0; ioctlsocket(sock, FIONBIO, &non_blocking); return -1;
+    }
+    FD_ZERO(&write_set); FD_SET(sock, &write_set);
+    timeout.tv_sec = seconds; timeout.tv_usec = 0;
+    result = select(0, NULL, &write_set, NULL, &timeout);
+    if (result > 0) getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&socket_error, &error_len);
+    non_blocking = 0; ioctlsocket(sock, FIONBIO, &non_blocking);
+    return result > 0 && socket_error == 0 ? 0 : -1;
+    #else
+    int flags = fcntl(sock, F_GETFL, 0);
+    int result, socket_error = 0;
+    socklen_t error_len = sizeof(socket_error);
+    fd_set write_set;
+    struct timeval timeout;
+    if (flags < 0 || fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) return -1;
+    result = connect(sock, address, (socklen_t)address_len);
+    if (result < 0 && errno != EINPROGRESS) { fcntl(sock, F_SETFL, flags); return -1; }
+    FD_ZERO(&write_set); FD_SET(sock, &write_set);
+    timeout.tv_sec = seconds; timeout.tv_usec = 0;
+    result = select(sock + 1, NULL, &write_set, NULL, &timeout);
+    if (result > 0) getsockopt(sock, SOL_SOCKET, SO_ERROR, &socket_error, &error_len);
+    fcntl(sock, F_SETFL, flags);
+    return result > 0 && socket_error == 0 ? 0 : -1;
+    #endif
+}
+
 /**
  * HTTP POST请求(不支持HTTPS，仅支持HTTP)
  * 注意: T3服务器需要支持HTTP访问，或者用户需要自行添加SSL支持
  */
-static int set_nonblocking(int sock, int nb) {
-#ifdef _WIN32
-    u_long mode = nb ? 1 : 0;
-    return ioctlsocket(sock, FIONBIO, &mode) == 0 ? 0 : -1;
-#else
-    int flags = fcntl(sock, F_GETFL, 0);
-    if (flags < 0) return -1;
-    /* 恢复阻塞时必须清除 O_NONBLOCK，否则 recv 会立刻返回 EAGAIN 导致请求失败 */
-    return fcntl(sock, F_SETFL, nb ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) == 0 ? 0 : -1;
-#endif
-}
-
-/* 解码 chunked 传输编码的 body，返回还原后的数据（失败返回 -1） */
-static int dechunk(const char *body, char *out, int out_len) {
-    int olen = 0;
-    const char *p = body;
-    while (*p) {
-        const char *line_end = strstr(p, "\r\n");
-        if (!line_end) return -1;
-        /* 解析十六进制块大小（可能带 ; 扩展） */
-        unsigned int chunk_size = 0;
-        const char *s = p;
-        int has_digit = 0;
-        while (s < line_end) {
-            char c = *s;
-            int v;
-            if (c >= '0' && c <= '9') v = c - '0';
-            else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
-            else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-            else break;
-            chunk_size = chunk_size * 16 + (unsigned int)v;
-            has_digit = 1;
-            s++;
-        }
-        if (!has_digit) return -1;
-        p = line_end + 2;
-        if (chunk_size == 0) return olen; /* 结束块 */
-        if ((unsigned int)olen + chunk_size > (unsigned int)out_len) return -1;
-        memmove(out + olen, p, chunk_size);
-        olen += chunk_size;
-        p += chunk_size;
-        if (strncmp(p, "\r\n", 2) != 0) return -1;
-        p += 2;
-    }
-    return olen;
-}
-
-/* 单连接 HTTP 收发：发送请求并读取完整响应，提取 body 写入 response（失败返回 -1）。
- * 服务器使用 chunked transfer-encoding 且保持连接，必须按块大小或
- * Content-Length 判断响应是否读完，不能依赖连接关闭。 */
-static int http_exchange(int sock, const URL_INFO *url_info, const char *post_data,
-                         char *response, int response_len) {
+static int http_post_once(const char *url, const char *post_data, char *response, int response_len) {
+    URL_INFO url_info;
+    struct hostent *host;
+    struct sockaddr_in server;
+    int sock;
     char request[4096];
     int bytes_received, total_received = 0;
     char *body_start;
-    int status = 0;
-    int chunked = 0;
-    size_t content_length = 0;
-    int header_done = 0;
+    
+    #ifdef _WIN32
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        return -1;
+    }
+    #endif
+    
+    /* 解析URL */
+    if (parse_url(url, &url_info) < 0) {
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return -1;
+    }
+    
+    /* 对于HTTPS，我们将协议改为HTTP (注意: 生产环境不安全) */
+    if (strcmp(url_info.protocol, "https") == 0) {
+        /* 此处应该使用SSL/TLS库，但为了避免依赖，我们使用HTTP */
+        /* 用户需要确保服务器也支持HTTP，或者自行添加SSL支持 */
+        url_info.port = 80;
+    }
+    
+    /* 获取主机信息 */
+    host = gethostbyname(url_info.host);
+    if (host == NULL) {
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return -1;
+    }
+    
+    /* 创建socket */
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return -1;
+    }
 
-#ifdef _WIN32
-    DWORD socket_timeout = 4000;
+    /* 防止单条线路长时间卡住收发 */
+    #ifdef _WIN32
+    DWORD socket_timeout = 7000;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&socket_timeout, sizeof(socket_timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&socket_timeout, sizeof(socket_timeout));
-#else
-    struct timeval socket_timeout = {4, 0};
+    #else
+    struct timeval socket_timeout = {7, 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &socket_timeout, sizeof(socket_timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &socket_timeout, sizeof(socket_timeout));
-#endif
-
+    #endif
+    
+    /* 设置服务器地址 */
+    server.sin_family = AF_INET;
+    server.sin_port = htons(url_info.port);
+    memcpy(&server.sin_addr, host->h_addr, host->h_length);
+    
+    /* 连接服务器 */
+    if (connect_with_timeout(sock, (struct sockaddr *)&server, sizeof(server), 3) < 0) {
+        #ifdef _WIN32
+        closesocket(sock);
+        WSACleanup();
+        #else
+        close(sock);
+        #endif
+        return -1;
+    }
+    
+    /* 构建HTTP请求 */
     snprintf(request, sizeof(request),
              "POST %s HTTP/1.1\r\n"
              "Host: %s\r\n"
@@ -877,55 +878,44 @@ static int http_exchange(int sock, const URL_INFO *url_info, const char *post_da
              "Connection: close\r\n"
              "\r\n"
              "%s",
-             url_info->path, url_info->host, (int)strlen(post_data), post_data);
-
-    if (send(sock, request, strlen(request), 0) < 0) return -1;
-
+             url_info.path, url_info.host, (int)strlen(post_data), post_data);
+    
+    /* 发送请求 */
+    if (send(sock, request, strlen(request), 0) < 0) {
+        #ifdef _WIN32
+        closesocket(sock);
+        WSACleanup();
+        #else
+        close(sock);
+        #endif
+        return -1;
+    }
+    
+    /* 接收响应 */
     memset(response, 0, response_len);
-    while ((bytes_received = recv(sock, response + total_received,
+    while ((bytes_received = recv(sock, response + total_received, 
                                   response_len - total_received - 1, 0)) > 0) {
         total_received += bytes_received;
         if (total_received >= response_len - 1) break;
-        response[total_received] = '\0';
-
-        if (!header_done) {
-            char *h_end = strstr(response, "\r\n\r\n");
-            if (h_end) {
-                header_done = 1;
-                char header[2048];
-                size_t hlen = (size_t)(h_end - response);
-                if (hlen >= sizeof(header)) hlen = sizeof(header) - 1;
-                memcpy(header, response, hlen);
-                header[hlen] = '\0';
-                if (strstr(header, "transfer-encoding: chunked") ||
-                    strstr(header, "Transfer-Encoding: chunked")) {
-                    chunked = 1;
-                } else {
-                    char *cl = strstr(header, "content-length:");
-                    if (!cl) cl = strstr(header, "Content-Length:");
-                    if (cl) {
-                        cl = strchr(cl, ':') + 1;
-                        while (*cl == ' ' || *cl == '\t') cl++;
-                        content_length = (size_t)strtoul(cl, NULL, 10);
-                    }
-                }
-            }
-        }
-        if (chunked) {
-            /* chunked 结束标记为 "0\r\n\r\n" */
-            if (total_received >= 5 && strcmp(response + total_received - 5, "0\r\n\r\n") == 0) break;
-        } else if (content_length > 0) {
-            char *h_end = strstr(response, "\r\n\r\n");
-            if (h_end && (size_t)(total_received - (h_end + 4 - response)) >= content_length) break;
-        }
     }
     response[total_received] = '\0';
-
+    
+    /* 关闭socket */
+    #ifdef _WIN32
+    closesocket(sock);
+    WSACleanup();
+    #else
+    close(sock);
+    #endif
+    
     if (total_received <= 0) return -1;
 
     /* 408/5xx 视为线路故障 */
-    sscanf(response, "HTTP/%*s %d", &status);
-    if (status == 408 || status >= 500) return -1;
+    {
+        int status = 0;
+        sscanf(response, "HTTP/%*s %d", &status);
+        if (status == 408 || status >= 500) return -1;
+    }
 
     /* 提取响应体 */
     body_start = strstr(response, "\r\n\r\n");
@@ -934,135 +924,8 @@ static int http_exchange(int sock, const URL_INFO *url_info, const char *post_da
         memmove(response, body_start, strlen(body_start) + 1);
     }
     if (response[0] == '\0') return -1;
-    if (chunked) {
-        /* 原地解码 chunked（源和目标重叠，dechunk 内部使用 memmove） */
-        int dlen = dechunk(response, response, response_len);
-        if (dlen < 0) return -1;
-        response[dlen] = '\0';
-    }
+    
     return 0;
-}
-
-#define T3_MAX_PARALLEL_CONN 8
-
-typedef struct {
-    int fd;
-    URL_INFO info;
-    int url_index;
-} T3_PENDING_CONN;
-
-/* 并发探测多台服务器：并行发起非阻塞连接，第一个成功完成请求的立即返回。
- * 相比串行 2s×N 重试，总耗时≈最快可用服务器的连接+响应时间，心跳/解绑显著提速。 */
-static int http_post_multi(char *urls[], int url_count, const char *post_data,
-                           char *response, int response_len, int *success_idx) {
-    T3_PENDING_CONN pend[T3_MAX_PARALLEL_CONN];
-    int pend_count = 0, i, ready, maxfd = 0;
-    fd_set master_set, work_set;
-    struct timeval tv;
-
-    if (success_idx) *success_idx = -1;
-    if (url_count <= 0) return -1;
-
-#ifdef _WIN32
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
-#endif
-
-    FD_ZERO(&master_set);
-    for (i = 0; i < url_count && pend_count < T3_MAX_PARALLEL_CONN; i++) {
-        URL_INFO info;
-        struct sockaddr_in server;
-        int sock;
-
-        if (parse_url(urls[i], &info) < 0) continue;
-        /* 对于HTTPS，我们将协议改为HTTP (注意: 生产环境不安全) */
-        if (strcmp(info.protocol, "https") == 0) info.port = 80;
-
-        sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0) continue;
-
-        server.sin_family = AF_INET;
-        server.sin_port = htons(info.port);
-        if (resolve_host_cached(info.host, &server.sin_addr) < 0) {
-#ifdef _WIN32
-            closesocket(sock);
-#else
-            close(sock);
-#endif
-            continue;
-        }
-        if (set_nonblocking(sock, 1) < 0) {
-#ifdef _WIN32
-            closesocket(sock);
-#else
-            close(sock);
-#endif
-            continue;
-        }
-        if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0
-#ifdef _WIN32
-            && WSAGetLastError() != WSAEWOULDBLOCK
-#else
-            && errno != EINPROGRESS
-#endif
-        ) {
-#ifdef _WIN32
-            closesocket(sock);
-#else
-            close(sock);
-#endif
-            continue;
-        }
-        pend[pend_count].fd = sock;
-        pend[pend_count].info = info;
-        pend[pend_count].url_index = i;
-        FD_SET(sock, &master_set);
-        if (sock > maxfd) maxfd = sock;
-        pend_count++;
-    }
-
-    if (pend_count > 0) {
-        /* 等待任意连接建立。select 在首个连接完成时立即返回，5s 仅为最坏情况上限 */
-        tv.tv_sec = 5;
-        tv.tv_usec = 0;
-        work_set = master_set;
-        ready = select(maxfd + 1, NULL, &work_set, NULL, &tv);
-        if (ready > 0) {
-            for (i = 0; i < pend_count; i++) {
-                int sock_error = 0;
-                if (!FD_ISSET(pend[i].fd, &work_set)) continue;
-#ifdef _WIN32
-                {
-                    int err_len = sizeof(sock_error);
-                    getsockopt(pend[i].fd, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &err_len);
-                }
-#else
-                {
-                    socklen_t err_len = sizeof(sock_error);
-                    getsockopt(pend[i].fd, SOL_SOCKET, SO_ERROR, &sock_error, &err_len);
-                }
-#endif
-                if (sock_error != 0) continue;
-                set_nonblocking(pend[i].fd, 0);
-                if (http_exchange(pend[i].fd, &pend[i].info, post_data, response, response_len) == 0) {
-                    if (success_idx) *success_idx = pend[i].url_index;
-                    break;
-                }
-            }
-        }
-    }
-
-    for (i = 0; i < pend_count; i++) {
-#ifdef _WIN32
-        closesocket(pend[i].fd);
-#else
-        close(pend[i].fd);
-#endif
-    }
-#ifdef _WIN32
-    WSACleanup();
-#endif
-    return success_idx && *success_idx >= 0 ? 0 : -1;
 }
 
 /* ========== JSON解析辅助函数 ========== */
@@ -1263,8 +1126,6 @@ static int json_get_int(const char *json, const char *key, int *value) {
     
     while (*start == ' ' || *start == '\t') start++;
     
-    /* 兼容字符串形式的数字：服务器部分接口（如解绑）返回 "code": "200"（字符串） */
-    if (*start == '"') start++;
     *value = atoi(start);
     return 0;
 }
@@ -1527,39 +1388,24 @@ static void build_url(const T3Verify *verify, const char *code, char *url, int u
 
 static int http_post(T3Verify *verify, const char *url, const char *post_data, char *response, int response_len) {
     URL_INFO original;
-    char targets[16][MAX_URL_LEN];
-    char *url_ptrs[16];
-    int count = 0, i, success_idx = -1;
+    char target[MAX_URL_LEN];
+    int i;
     if (parse_url(url, &original) < 0) return -1;
 
-    /* 收集候选 URL（当前记忆服务器 + 全部备用服务器） */
-    for (i = -1; i < verify->server_count && count < 16; i++) {
+    for (i = -1; i < verify->server_count; i++) {
         const char *base = i < 0 ? verify->server_url : verify->server_urls[i];
         size_t base_len;
         if (i >= 0 && strcmp(base, verify->server_url) == 0) continue;
         base_len = strlen(base);
         if (base_len > 0 && base[base_len - 1] == '/' && original.path[0] == '/')
-            snprintf(targets[count], sizeof(targets[count]), "%.*s%s", (int)base_len - 1, base, original.path);
+            snprintf(target, sizeof(target), "%.*s%s", (int)base_len - 1, base, original.path);
         else
-            snprintf(targets[count], sizeof(targets[count]), "%s%s", base, original.path);
-        url_ptrs[count] = targets[count];
-        count++;
-    }
-
-    /* 并发探测全部候选服务器，取最快成功者 */
-    if (http_post_multi(url_ptrs, count, post_data, response, response_len, &success_idx) == 0) {
-        if (success_idx >= 0 && success_idx < count) {
-            /* 记住成功的服务器，后续请求优先走它 */
-            char *path_pos = strstr(targets[success_idx], original.path);
-            if (path_pos) {
-                int base_len = (int)(path_pos - targets[success_idx]);
-                if (base_len > 0 && base_len < MAX_URL_LEN) {
-                    memcpy(verify->server_url, targets[success_idx], base_len);
-                    verify->server_url[base_len] = '\0';
-                }
-            }
+            snprintf(target, sizeof(target), "%s%s", base, original.path);
+        if (http_post_once(target, post_data, response, response_len) == 0) {
+            strncpy(verify->server_url, base, MAX_URL_LEN - 1);
+            verify->server_url[MAX_URL_LEN - 1] = '\0';
+            return 0;
         }
-        return 0;
     }
     return -1;
 }
@@ -1643,6 +1489,7 @@ static int decode_response(const T3Verify *verify, const char *response,
     const char *data = response;
     const char *newline;
     char *clean, *s, *d;
+    size_t clen;
     int result;
     
     newline = strchr(response, '\n');
@@ -1653,6 +1500,9 @@ static int decode_response(const T3Verify *verify, const char *response,
     s = clean; d = clean;
     while (*s) { if (*s != '\r' && *s != '\n') *d++ = *s; s++; }
     *d = '\0';
+    
+    clen = strlen(clean);
+    if (clen > 0 && clean[clen - 1] == '0') clean[clen - 1] = '\0';
     
     if (verify->encode_type == 0) {
         /* Base64模式 */

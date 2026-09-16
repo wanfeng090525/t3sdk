@@ -214,28 +214,17 @@ public class LoginActivity extends Activity {
             showError("请输入要解绑的卡密");
             return;
         }
-        // T3 解绑接口要求传入【新】机器码（换绑目标设备），与当前一致会被服务器拒绝
-        final EditText et = new EditText(this);
-        et.setHint("请输入新设备（换绑目标）的机器码");
-        et.setSingleLine(true);
-
+        if (TextUtils.isEmpty(machineCode)) {
+            showError("机器码获取失败，无法解绑");
+            return;
+        }
         AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle("解绑/换绑卡密");
-        b.setMessage("解绑卡密 " + kami + " 后，将绑定到新设备机器码，可在新设备登录。\n请先在新设备上查看其机器码再填入，与当前机器码一致时服务器会拒绝解绑。");
-        b.setView(et);
+        b.setTitle("解绑卡密");
+        b.setMessage("确定要解绑卡密 " + kami + " 吗？解绑后可在其他设备重新绑定。");
         b.setNegativeButton("取消", null);
         b.setPositiveButton("解绑", (d, w) -> {
-            final String newImei = et.getText().toString().trim();
-            if (TextUtils.isEmpty(newImei)) {
-                showError("请输入新设备机器码");
-                return;
-            }
-            if (!TextUtils.isEmpty(machineCode) && newImei.equals(machineCode)) {
-                showError("新机器码与当前一致，无需解绑");
-                return;
-            }
             executor.execute(() -> {
-                T3Result r = t3.unbindKami(kami, newImei);
+                T3Result r = t3.unbindKami(kami, machineCode);
                 mainHandler.post(() -> {
                     if (r != null && r.success) {
                         // 解绑成功后清除 .so 内保存的卡密，不再自动登录

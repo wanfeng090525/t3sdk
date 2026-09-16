@@ -623,9 +623,6 @@ bool jsonGetInt(const std::string& json, const std::string& key, int& value) {
     if(pos==std::string::npos) return false;
     pos=json.find(':',pos); if(pos==std::string::npos) return false;
     pos++; while(pos<json.size()&&(json[pos]==' '||json[pos]=='\t')) pos++;
-    if(pos>=json.size()) return false;
-    /* 兼容字符串形式的数字：服务器部分接口（如解绑）返回 "code": "200"（字符串） */
-    if(json[pos]=='"') pos++;
     value=atoi(json.c_str()+pos);
     return true;
 }
@@ -662,102 +659,87 @@ bool parseUrl(const std::string& url, URLInfo& info) {
     return true;
 }
 
-/* DNS 缓存：Android 上 gethostbyname 阻塞且无超时，网络差时每次请求可能卡数秒。
- * 缓存解析结果（TTL 10 分钟），心跳/登录/解绑等高频请求直接复用 IP，大幅提速。 */
-struct DnsCacheEntry {
-    std::string host;
-    std::string ip;
-    time_t ts;
-};
-
-static const int g_dns_cache_cap = 8;
-static DnsCacheEntry g_dns_cache[8];
-static int g_dns_cache_count = 0;
-static const time_t g_dns_cache_ttl = 600;
-
-static bool resolveHostCached(const std::string& host, struct in_addr* out) {
-    time_t now = time(NULL);
-    for (int i = 0; i < g_dns_cache_count; i++) {
-        if (g_dns_cache[i].host == host) {
-            if (now - g_dns_cache[i].ts < g_dns_cache_ttl) {
-                return inet_pton(AF_INET, g_dns_cache[i].ip.c_str(), out) == 1;
-            }
-            /* 缓存过期，移除后重新解析 */
-            g_dns_cache[i] = g_dns_cache[--g_dns_cache_count];
-            break;
-        }
-    }
-    struct hostent *h = gethostbyname(host.c_str());
-    if (!h) return false;
-    char ipStr[INET_ADDRSTRLEN];
-    if (!inet_ntop(AF_INET, h->h_addr, ipStr, sizeof(ipStr))) return false;
-    if (g_dns_cache_count < g_dns_cache_cap) {
-        g_dns_cache[g_dns_cache_count++] = {host, ipStr, now};
-    }
-    return inet_pton(AF_INET, ipStr, out) == 1;
-}
-
-static bool setNonBlocking(int sock, bool nb) {
+bool connectWithTimeout(int sock, const struct sockaddr *address, int addressLength, int seconds) {
     #ifdef _WIN32
-    u_long mode = nb ? 1 : 0;
-    return ioctlsocket(sock, FIONBIO, &mode) == 0;
+    u_long nonBlocking=1;
+    ioctlsocket(sock,FIONBIO,&nonBlocking);
+    int result=connect(sock,address,addressLength);
+    if(result==SOCKET_ERROR&&WSAGetLastError()!=WSAEWOULDBLOCK){ nonBlocking=0; ioctlsocket(sock,FIONBIO,&nonBlocking); return false; }
+    fd_set writeSet; FD_ZERO(&writeSet); FD_SET(sock,&writeSet);
+    timeval timeout={seconds,0};
+    result=select(0,nullptr,&writeSet,nullptr,&timeout);
+    int socketError=0; int errorLength=sizeof(socketError);
+    if(result>0) getsockopt(sock,SOL_SOCKET,SO_ERROR,(char*)&socketError,&errorLength);
+    nonBlocking=0; ioctlsocket(sock,FIONBIO,&nonBlocking);
+    return result>0&&socketError==0;
     #else
-    int flags = fcntl(sock, F_GETFL, 0);
-    if (flags < 0) return false;
-    /* 恢复阻塞时必须清除 O_NONBLOCK，否则 recv 会立刻返回 EAGAIN 导致请求失败 */
-    return fcntl(sock, F_SETFL, nb ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) == 0;
+    int flags=fcntl(sock,F_GETFL,0);
+    if(flags<0) return false;
+    if(fcntl(sock,F_SETFL,flags|O_NONBLOCK)<0) return false;
+    int result=connect(sock,address,addressLength);
+    if(result<0&&errno!=EINPROGRESS){ fcntl(sock,F_SETFL,flags); return false; }
+    fd_set writeSet; FD_ZERO(&writeSet); FD_SET(sock,&writeSet);
+    timeval timeout={seconds,0};
+    result=select(sock+1,nullptr,&writeSet,nullptr,&timeout);
+    int socketError=0; socklen_t errorLength=sizeof(socketError);
+    if(result>0) getsockopt(sock,SOL_SOCKET,SO_ERROR,&socketError,&errorLength);
+    fcntl(sock,F_SETFL,flags);
+    return result>0&&socketError==0;
     #endif
 }
 
-/* 解码 chunked 传输编码的 body，返回还原后的数据（失败返回空串） */
-static std::string dechunk(const std::string& body) {
-    std::string out;
-    size_t pos=0;
-    while(pos<body.size()){
-        auto lineEnd=body.find("\r\n",pos);
-        if(lineEnd==std::string::npos) break;
-        std::string sizeLine=body.substr(pos,lineEnd-pos);
-        /* 去掉分号扩展部分 */
-        auto semi=sizeLine.find(';');
-        if(semi!=std::string::npos) sizeLine=sizeLine.substr(0,semi);
-        /* 解析十六进制块大小 */
-        unsigned int chunkSize=0;
-        bool hasDigit=false;
-        for(char c:sizeLine){
-            int v;
-            if(c>='0'&&c<='9') v=c-'0';
-            else if(c>='a'&&c<='f') v=c-'a'+10;
-            else if(c>='A'&&c<='F') v=c-'A'+10;
-            else break;
-            chunkSize=chunkSize*16+(unsigned int)v;
-            hasDigit=true;
-        }
-        if(!hasDigit) break;
-        pos=lineEnd+2;
-        if(chunkSize==0) break; /* 结束块 */
-        if(pos+chunkSize>body.size()) break;
-        out.append(body,pos,chunkSize);
-        pos+=chunkSize;
-        if(pos+2<=body.size()&&body.compare(pos,2,"\r\n")==0) pos+=2;
-        else break;
-    }
-    return out;
-}
-
-/* 单连接 HTTP 交换：发送请求并读取完整响应，返回 body（失败返回空串）。
- * 服务器使用 chunked transfer-encoding 且保持连接，必须按块大小或
- * Content-Length 判断响应是否读完，不能依赖连接关闭。 */
-static std::string httpExchange(int sock, const URLInfo& info, const std::string& postData) {
+std::string httpPostRaw(const std::string& url, const std::string& postData) {
+    URLInfo info;
+    if(!parseUrl(url,info)) return "";
+    
+    /* HTTPS降级为HTTP（与C版本一致） */
+    if(info.protocol=="https") info.port=80;
+    
     #ifdef _WIN32
-    DWORD socketTimeout=4000;
+    WSADATA wsa;
+    if(WSAStartup(MAKEWORD(2,2),&wsa)!=0) return "";
+    #endif
+    
+    struct hostent *host=gethostbyname(info.host.c_str());
+    if(!host){
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return "";
+    }
+    
+    int sock=socket(AF_INET,SOCK_STREAM,0);
+    if(sock<0){
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return "";
+    }
+    
+    struct sockaddr_in server;
+    server.sin_family=AF_INET;
+    server.sin_port=htons(info.port);
+    memcpy(&server.sin_addr,host->h_addr,host->h_length);
+    
+    if(!connectWithTimeout(sock,(struct sockaddr*)&server,sizeof(server),3)){
+        #ifdef _WIN32
+        closesocket(sock); WSACleanup();
+        #else
+        close(sock);
+        #endif
+        return "";
+    }
+
+    #ifdef _WIN32
+    DWORD socketTimeout=7000;
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,(const char*)&socketTimeout,sizeof(socketTimeout));
     #else
-    timeval socketTimeout={4,0};
+    timeval socketTimeout={7,0};
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&socketTimeout,sizeof(socketTimeout));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,&socketTimeout,sizeof(socketTimeout));
     #endif
-
+    
     std::ostringstream req;
     req<<"POST "<<info.path<<" HTTP/1.1\r\n"
        <<"Host: "<<info.host<<"\r\n"
@@ -767,47 +749,29 @@ static std::string httpExchange(int sock, const URLInfo& info, const std::string
        <<"\r\n"
        <<postData;
     std::string reqStr=req.str();
-
-    if(send(sock,reqStr.c_str(),(int)reqStr.size(),0)<0) return "";
-
+    
+    if(send(sock,reqStr.c_str(),(int)reqStr.size(),0)<0){
+        #ifdef _WIN32
+        closesocket(sock); WSACleanup();
+        #else
+        close(sock);
+        #endif
+        return "";
+    }
+    
     std::string response;
     char buf[4096];
     int n;
-    bool chunked=false, seenHeader=false;
-    size_t contentLength=0;
     while((n=recv(sock,buf,sizeof(buf)-1,0))>0){
         buf[n]='\0'; response+=buf;
-        if(!seenHeader){
-            auto hEnd=response.find("\r\n\r\n");
-            if(hEnd!=std::string::npos){
-                seenHeader=true;
-                std::string header=response.substr(0,hEnd);
-                std::string hl=header;
-                std::transform(hl.begin(),hl.end(),hl.begin(),::tolower);
-                if(hl.find("transfer-encoding: chunked")!=std::string::npos){
-                    chunked=true;
-                } else {
-                    size_t clp=hl.find("content-length:");
-                    if(clp!=std::string::npos){
-                        clp+=15;
-                        while(clp<hl.size()&&hl[clp]==' ') clp++;
-                        while(clp<hl.size()&&hl[clp]>='0'&&hl[clp]<='9'){
-                            contentLength=contentLength*10+(size_t)(hl[clp]-'0');
-                            clp++;
-                        }
-                    }
-                }
-            }
-        }
-        if(chunked){
-            /* chunked 结束标记为 "0\r\n\r\n" */
-            if(response.size()>=5&&response.compare(response.size()-5,5,"0\r\n\r\n")==0) break;
-        } else if(contentLength>0){
-            auto hEnd=response.find("\r\n\r\n");
-            if(hEnd!=std::string::npos&&response.size()-hEnd-4>=contentLength) break;
-        }
     }
-
+    
+    #ifdef _WIN32
+    closesocket(sock); WSACleanup();
+    #else
+    close(sock);
+    #endif
+    
     /* 408/5xx 是可切换线路的网络故障 */
     auto lineEnd=response.find("\r\n");
     int status=0;
@@ -818,133 +782,10 @@ static std::string httpExchange(int sock, const URLInfo& info, const std::string
     if(status==408||status>=500) return "";
 
     /* 提取HTTP body */
-    std::string body;
     auto bodyPos=response.find("\r\n\r\n");
-    if(bodyPos!=std::string::npos) body=response.substr(bodyPos+4);
-    else body=response;
-    if(chunked) body=dechunk(body);
-    return body;
-}
-
-/* 并发探测多台服务器：并行发起非阻塞连接，第一个成功完成请求的立即返回。
- * 相比串行 2s×N 重试，总耗时≈最快可用服务器的连接+响应时间，心跳/解绑显著提速。 */
-static const int g_max_parallel_conn = 8;
-static const int g_parallel_select_sec = 5;
-static const int g_parallel_select_usec = 0;
-
-std::string httpPostRawMulti(const std::vector<std::string>& urls,
-                             const std::string& postData,
-                             std::string* successUrl) {
-    if(successUrl) successUrl->clear();
-    if(urls.empty()) return "";
-
-    struct PendingConn {
-        int fd;
-        URLInfo info;
-        std::string url;
-    };
-    PendingConn pend[g_max_parallel_conn];
-    int pendCount=0;
-    fd_set masterSet; FD_ZERO(&masterSet);
-    int maxfd=0;
-
-    #ifdef _WIN32
-    WSADATA wsa;
-    if(WSAStartup(MAKEWORD(2,2),&wsa)!=0) return "";
-    #endif
-
-    for(const auto& u:urls){
-        if(pendCount>=g_max_parallel_conn) break;
-        URLInfo info;
-        if(!parseUrl(u,info)) continue;
-        /* HTTPS降级为HTTP（与C版本一致） */
-        if(info.protocol=="https") info.port=80;
-        int sock=socket(AF_INET,SOCK_STREAM,0);
-        if(sock<0) continue;
-        struct sockaddr_in server;
-        server.sin_family=AF_INET;
-        server.sin_port=htons(info.port);
-        if(!resolveHostCached(info.host,&server.sin_addr)){
-            #ifdef _WIN32
-            closesocket(sock);
-            #else
-            close(sock);
-            #endif
-            continue;
-        }
-        if(!setNonBlocking(sock,true)){
-            #ifdef _WIN32
-            closesocket(sock);
-            #else
-            close(sock);
-            #endif
-            continue;
-        }
-        int r=connect(sock,(struct sockaddr*)&server,sizeof(server));
-        if(r<0
-           #ifdef _WIN32
-           &&WSAGetLastError()!=WSAEWOULDBLOCK
-           #else
-           &&errno!=EINPROGRESS
-           #endif
-        ){
-            #ifdef _WIN32
-            closesocket(sock);
-            #else
-            close(sock);
-            #endif
-            continue;
-        }
-        pend[pendCount].fd=sock;
-        pend[pendCount].info=info;
-        pend[pendCount].url=u;
-        FD_SET(sock,&masterSet);
-        if(sock>maxfd) maxfd=sock;
-        pendCount++;
-    }
-
-    std::string result;
-    if(pendCount>0){
-        /* 等待任意连接建立。select 在首个连接完成时立即返回，5s 仅为最坏情况上限 */
-        timeval tv;
-        tv.tv_sec=g_parallel_select_sec;
-        tv.tv_usec=g_parallel_select_usec;
-        fd_set workSet=masterSet;
-        int ready=select(maxfd+1,nullptr,&workSet,nullptr,&tv);
-        if(ready>0){
-            for(int i=0;i<pendCount;i++){
-                if(!FD_ISSET(pend[i].fd,&workSet)) continue;
-                int sockError=0;
-                #ifdef _WIN32
-                int errorLen=sizeof(sockError);
-                getsockopt(pend[i].fd,SOL_SOCKET,SO_ERROR,(char*)&sockError,&errorLen);
-                #else
-                socklen_t errorLen=sizeof(sockError);
-                getsockopt(pend[i].fd,SOL_SOCKET,SO_ERROR,&sockError,&errorLen);
-                #endif
-                if(sockError!=0) continue;
-                setNonBlocking(pend[i].fd,false);
-                std::string body=httpExchange(pend[i].fd,pend[i].info,postData);
-                if(!body.empty()){
-                    result=body;
-                    if(successUrl) *successUrl=pend[i].url;
-                    break;
-                }
-            }
-        }
-    }
-
-    for(int i=0;i<pendCount;i++){
-        #ifdef _WIN32
-        closesocket(pend[i].fd);
-        #else
-        close(pend[i].fd);
-        #endif
-    }
-    #ifdef _WIN32
-    WSACleanup();
-    #endif
-    return result;
+    if(bodyPos!=std::string::npos)
+        return response.substr(bodyPos+4);
+    return response;
 }
 
 } /* end anonymous namespace */
@@ -1102,13 +943,15 @@ std::string T3Verify::encodeValue(const std::string& value) const {
 }
 
 std::string T3Verify::decodeResponse(const std::string& responseText) const {
-    /* 清理响应（chunked 已在 HTTP 层解码，这里仅兼容旧式"长度\n数据"格式） */
+    /* 清理响应 */
     std::string data=responseText;
     auto nl=data.find('\n');
     if(nl!=std::string::npos) data=data.substr(nl+1);
     /* 去除\r\n */
     std::string clean;
     for(char c:data) if(c!='\r'&&c!='\n') clean+=c;
+    /* 去除末尾的0 */
+    if(!clean.empty()&&clean.back()=='0') clean.pop_back();
     
     if(encodeType_==0) return encoder_->decode(clean);
     else return rsaCrypto_->decryptFromBase64(clean);
@@ -1146,12 +989,12 @@ std::string T3Verify::httpPost(const std::string& url,
     if(!parseUrl(url,original)) throw std::runtime_error("无效的URL");
     std::vector<std::string> candidates={serverUrl_};
     for(const auto& base:serverUrls_) if(base!=serverUrl_) candidates.push_back(base);
-    /* 并发探测所有候选服务器，取最快成功者，避免串行 2s×N 重试导致心跳/解绑过慢 */
-    std::string successUrl;
-    std::string response=httpPostRawMulti(candidates,postData,&successUrl);
-    if(!response.empty()){
-        if(!successUrl.empty()) serverUrl_=successUrl;
-        return response;
+    for(const auto& base:candidates){
+        std::string target=base;
+        if(!target.empty()&&target.back()=='/'&&!original.path.empty()&&original.path.front()=='/') target.pop_back();
+        target+=original.path;
+        std::string response=httpPostRaw(target,postData);
+        if(!response.empty()){ serverUrl_=base; return response; }
     }
     throw std::runtime_error("无法连接到所有T3网络验证服务器，可能是因为您的网络问题或T3网络验证服务器被攻击造成的，建议检查网络或稍后重试");
 }

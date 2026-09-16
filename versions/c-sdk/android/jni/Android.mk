@@ -10,6 +10,4 @@ LOCAL_SRC_FILES := ../../src/t3sdk.c ../../src/t3sdk_jni.c
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/../../include
 LOCAL_CFLAGS    := -Wall -O2 -fPIC
 LOCAL_LDLIBS    := -llog
-# 禁用 --gc-sections，防止部分架构下响应解析代码被链接器误回收
-LOCAL_LDFLAGS   := -Wl,--no-gc-sections
 include $(BUILD_SHARED_LIBRARY)

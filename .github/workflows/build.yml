@@ -32,17 +32,11 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
           cd "${GITHUB_WORKSPACE}/versions/c-sdk/android"
-          rm -rf libs obj
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=jni/Android.mk \
             NDK_APPLICATION_MK=jni/Application.mk
           tar czf "${GITHUB_WORKSPACE}/versions/c-sdk/t3sdk-c-sdk-android.tar.gz" libs
-
-      - name: 版本A - 校验 Android .so 包含修复代码
-        run: |
-          python3 "${GITHUB_WORKSPACE}/scripts/check_so.py" \
-            "${GITHUB_WORKSPACE}/versions/c-sdk/android/libs"
 
       - name: 版本A - 构建 Linux .so
         run: |
@@ -55,17 +49,11 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
           cd "${GITHUB_WORKSPACE}/versions/official-cpp/android"
-          rm -rf libs obj
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=jni/Android.mk \
             NDK_APPLICATION_MK=jni/Application.mk
           tar czf "${GITHUB_WORKSPACE}/versions/official-cpp/t3sdk-official-cpp-android.tar.gz" libs
-
-      - name: 版本B - 校验 Android .so 包含修复代码
-        run: |
-          python3 "${GITHUB_WORKSPACE}/scripts/check_so.py" \
-            "${GITHUB_WORKSPACE}/versions/official-cpp/android/libs"
 
       - name: 版本B - 构建 Linux .so
         run: |
