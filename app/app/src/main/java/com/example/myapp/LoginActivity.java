@@ -71,6 +71,12 @@ public class LoginActivity extends Activity {
             mainHandler.post(() -> {
                 tvMachineCode.setText(TextUtils.isEmpty(machineCode) ? "获取失败" : machineCode);
                 if (!ok) tvError.setText("SDK 初始化失败，请检查 libt3sdk.so");
+                // 自动登录（官方 Fullscreen 示例逻辑：读取本地保存卡密自动验证）
+                String savedKami = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .getString(KEY_KAMI, "");
+                if (ok && !TextUtils.isEmpty(savedKami) && !TextUtils.isEmpty(machineCode)) {
+                    tryAutoLogin(savedKami);
+                }
             });
         });
 
@@ -87,6 +93,45 @@ public class LoginActivity extends Activity {
         findViewById(R.id.rowNotice).setOnClickListener(v -> loadNotice());
         findViewById(R.id.rowUpdate).setOnClickListener(v -> checkUpdate());
         findViewById(R.id.rowUnbind).setOnClickListener(v -> confirmUnbind());
+    }
+
+    // ========== 自动登录（官方 Fullscreen 示例逻辑） ==========
+
+    private void tryAutoLogin(final String kami) {
+        final AlertDialog loading = new AlertDialog.Builder(this)
+                .setMessage("正在自动登录...")
+                .setCancelable(false)
+                .create();
+        loading.show();
+        btnLogin.setEnabled(false);
+
+        executor.execute(() -> {
+            final T3LoginResult r = t3.login(kami, machineCode);
+            mainHandler.post(() -> {
+                loading.dismiss();
+                if (r != null && r.success) {
+                    // 自动登录成功，直接进入主界面
+                    saveLogin(kami, r);
+                    Intent intent = new Intent(LoginActivity.this, MainActivity.class);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivity(intent);
+                    finish();
+                } else {
+                    // 自动登录失败：清除保存的卡密，转手动输入
+                    clearSavedKami();
+                    showError(r != null && !TextUtils.isEmpty(r.error) ? r.error : "自动登录失败");
+                    btnLogin.setEnabled(true);
+                }
+            });
+        });
+    }
+
+    private void clearSavedKami() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .remove(KEY_KAMI)
+                .remove(KEY_STATECODE)
+                .remove(KEY_END_TIME)
+                .apply();
     }
 
     private void doLogin() {
