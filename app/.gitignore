@@ -1,0 +1,12 @@
+# Gradle
+.gradle/
+build/
+!app/build/outputs/.gitkeep
+local.properties
+
+# 签名文件（私钥不提交，保留在本地 /workspace/t3sdk/app/myapp.keystore）
+*.keystore
+
+# IDE
+.idea/
+*.iml
