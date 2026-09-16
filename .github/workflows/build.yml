@@ -65,6 +65,56 @@ jobs:
           ls -la "${GITHUB_WORKSPACE}/versions/official-cpp/"
           find "${GITHUB_WORKSPACE}/versions/official-cpp" -name "*.so" -ls
 
+      # ============ App: iOS 风格 Android App ============
+      - name: App - 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: App - 安装 Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.5"
+
+      - name: App - 安装 Android SDK 组件
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" > /dev/null || true
+
+      - name: App - 同步 libt3sdk.so 到 jniLibs
+        run: |
+          rm -rf "${GITHUB_WORKSPACE}/app/app/src/main/jniLibs"
+          mkdir -p "${GITHUB_WORKSPACE}/app/app/src/main/jniLibs"
+          cp -r "${GITHUB_WORKSPACE}/versions/official-cpp/android/libs/." \
+                "${GITHUB_WORKSPACE}/app/app/src/main/jniLibs/"
+          find "${GITHUB_WORKSPACE}/app/app/src/main/jniLibs" -name "*.so" -ls
+
+      - name: App - 准备签名
+        run: |
+          if [ -n "${{ secrets.MYAPP_KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.MYAPP_KEYSTORE_B64 }}" | base64 -d > "${GITHUB_WORKSPACE}/app/myapp.keystore"
+            echo "MYAPP_KEYSTORE_FILE=${GITHUB_WORKSPACE}/app/myapp.keystore" >> "$GITHUB_ENV"
+            echo "MYAPP_KEYSTORE_PASS=${{ secrets.MYAPP_KEYSTORE_PASS }}" >> "$GITHUB_ENV"
+            echo "使用仓库 secret 签名"
+          else
+            keytool -genkeypair -v -keystore "${GITHUB_WORKSPACE}/app/myapp.keystore" \
+              -alias myapp -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass t3sdk2026 -keypass t3sdk2026 \
+              -dname "CN=MyApp, OU=Dev, O=MyApp, L=Beijing, S=Beijing, C=CN" > /dev/null 2>&1
+            echo "使用临时 keystore 签名"
+          fi
+
+      - name: App - 构建 release APK
+        run: |
+          cd "${GITHUB_WORKSPACE}/app"
+          gradle assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk \
+             "${GITHUB_WORKSPACE}/app/My_App_T3SDK_v1.0.apk"
+          ls -lh "${GITHUB_WORKSPACE}/app/My_App_T3SDK_v1.0.apk"
+
       - name: 校验构建产物
         run: |
           echo "=== 构建产物清单 ==="
@@ -82,6 +132,7 @@ jobs:
             versions/c-sdk/t3sdk-linux-x86_64.so
             versions/official-cpp/t3sdk-official-cpp-android.tar.gz
             versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so
+            app/My_App_T3SDK_v1.0.apk
 
       - name: 附加到 Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -96,4 +147,5 @@ jobs:
             versions/c-sdk/t3sdk-linux-x86_64.so \
             versions/official-cpp/t3sdk-official-cpp-android.tar.gz \
             versions/official-cpp/t3sdk-official-cpp-linux-x86_64.so \
+            app/My_App_T3SDK_v1.0.apk \
             --clobber

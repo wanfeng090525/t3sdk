@@ -104,7 +104,38 @@ Java_com_t3yanzheng_sdk_T3Verify_nativeInit(JNIEnv *env, jobject thiz, jlong han
     bool ok = verify->initRSA(
         T3_LOGIN_CODE, T3_NOTICE_CODE, T3_VERSION_CODE,
         T3_HEARTBEAT_CODE, T3_APPKEY, T3_RSA_PUBLIC_KEY);
-    return ok ? JNI_TRUE : JNI_FALSE;
+    if (!ok) return JNI_FALSE;
+    /* 设置新增接口调用码（与官方 example_all_api.c 保持一致） */
+    verify->setCode("query",            "A2AC50154CC51A76");
+    verify->setCode("register",         "6B9EABFF00B80750");
+    verify->setCode("user_login",       "ECCFEFE957984480");
+    verify->setCode("user_heartbeat",   "EF796F4016C97A66");
+    verify->setCode("qq_login",         "B6652EB5C78F0641");
+    verify->setCode("bind_qq",          "BF0378334FF0F0F5");
+    verify->setCode("change_password",  "B7C4CD0FAE40AE8C");
+    verify->setCode("user_cancel",      "A71666D3D237E922");
+    verify->setCode("recharge",         "57559AB00DE6A9DE");
+    verify->setCode("kami_recharge",    "A4634B5AC1F5341A");
+    verify->setCode("unbind",           "2CA5F5986D945633");
+    verify->setCode("ip_unbind",        "C21B2219566669B9");
+    verify->setCode("disable",          "CF41580160F0AE75");
+    verify->setCode("check_update",     "890829CBEFA61A56");
+    verify->setCode("get_variable",     "A015ABD9403AC64A");
+    verify->setCode("modify_variable",  "78CFB294B32DC2A3");
+    verify->setCode("modify_core",      "F9CE457547B9DD0F");
+    verify->setCode("get_kami_core",    "8C58C52B3053820A");
+    verify->setCode("get_user_core",    "CD79FE55F3CE48B2");
+    verify->setCode("online_kami",      "B61D29EBFA5E3CF5");
+    verify->setCode("online_user",      "0D46101793B42DD3");
+    verify->setCode("cloud_doc",        "F50B362FC86CC38E");
+    verify->setCode("app_sign",         "BAB98433A890FFB0");
+    verify->setCode("qq_heartbeat",     "77C9731065BAB2A4");
+    verify->setCode("qq_get_variable",  "2CE5BD9B12733032");
+    verify->setCode("qq_get_core",      "5EF62F8A7630DC9A");
+    verify->setCode("qq_modify_core",   "ACA861E2C03E9385");
+    verify->setCode("qq_unbind",        "8E113021CB8FE80E");
+    verify->setCode("heartbeat_any",    "A0D682FB88F82D31");
+    return JNI_TRUE;
 }
 
 /* ========== 动态调用码 ========== */
