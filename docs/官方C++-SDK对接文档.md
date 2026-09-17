@@ -19,6 +19,107 @@ static { System.loadLibrary("t3sdk"); }   // T3Verify.java 已内置
 
 然后调用 `T3Verify` 类的方法即可，**所有凭证都已编译在 .so 里，Java 层不需要也不包含任何调用码/APPKEY/公钥**。
 
+## 1.1 APK 实际对接方式（深度分析自 My_App_T3SDK.apk）
+
+> 以下流程是反编译 APK 得到的真实用法，按此写你的 App 即可。
+
+```java
+public class LoginActivity extends Activity {
+    private T3Verify t3;
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    @Override protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        t3 = new T3Verify();          // 构造时自动创建 native 句柄
+        boolean ok = t3.init();       // 主线程 init（只加载内置凭证，不发网络请求）
+        // 机器码必须在子线程获取
+        executor.execute(() -> {
+            final String machine = T3Verify.getMachineCode();   // static native
+            mainHandler.post(() -> tvMachine.setText(machine));
+        });
+        btnLogin.setOnClickListener(v -> doLogin());
+    }
+
+    private void doLogin() {
+        final String kami = etKami.getText().toString().trim();
+        executor.execute(() -> {
+            T3LoginResult r = t3.login(kami, T3Verify.getMachineCode());
+            mainHandler.post(() -> {
+                if (r != null && r.success) {
+                    // ★ 保存登录信息，重启后用于自动登录和心跳
+                    getSharedPreferences("t3_prefs", 0).edit()
+                        .putString("kami", kami)
+                        .putString("imei", T3Verify.getMachineCode())
+                        .putString("statecode", r.statecode)
+                        .putString("end_time", r.endTime).apply();
+                    startActivity(new Intent(this, MainActivity.class));
+                    finish();
+                } else {
+                    showError(r != null ? r.error : "登录失败");
+                }
+            });
+        });
+    }
+
+    @Override protected void onDestroy() {
+        super.onDestroy();
+        if (t3 != null) { t3.destroy(); t3 = null; }
+        executor.shutdown();
+    }
+}
+```
+
+```java
+public class MainActivity extends Activity {
+    private static final long HEARTBEAT_INTERVAL = 30000;  // ★ 实际就是 30 秒
+    private T3Verify t3;
+    private String kami, imei, statecode;
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable heartbeatTask = new Runnable() {
+        @Override public void run() {
+            executor.execute(() -> {
+                T3Result hb = t3.heartbeat(kami, statecode);   // 子线程心跳
+                mainHandler.post(() -> tvHeartbeat.setText(hb != null && hb.success ? "正常" : "异常"));
+            });
+            mainHandler.postDelayed(this, HEARTBEAT_INTERVAL); // 循环调度
+        }
+    };
+
+    @Override protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        SharedPreferences sp = getSharedPreferences("t3_prefs", 0);
+        kami = sp.getString("kami", "");
+        imei = sp.getString("imei", "");
+        statecode = sp.getString("statecode", "");
+        if (TextUtils.isEmpty(kami)) { backToLogin(); return; }
+        t3 = new T3Verify();
+        t3.init();
+        mainHandler.postDelayed(heartbeatTask, HEARTBEAT_INTERVAL);
+    }
+
+    // 公告/更新/解绑 全部在 executor 里调用：
+    //   T3NoticeResult n = t3.getNotice();                 → 公告 n.notice
+    //   T3VersionResult v = t3.getLatestVersion();
+    //   T3UpdateResult  up = t3.checkUpdate(v.version);    → up.hasUpdate / up.ver / up.uplog
+    //   T3Result unb = t3.unbindKami(kami, imei);          → 解绑
+
+    @Override protected void onDestroy() {
+        mainHandler.removeCallbacks(heartbeatTask);
+        if (t3 != null) { t3.destroy(); t3 = null; }
+        executor.shutdown();
+        super.onDestroy();
+    }
+}
+```
+
+**关键点（与 APK 逐行核对）**：
+- 心跳间隔 `30000`ms = **30 秒**（不是 60 秒），用 `postDelayed` 循环
+- `statecode` 必须持久化（APK 用 `SharedPreferences("t3_prefs")`），重启后不需要重新登录也能直接心跳
+- `login()` 的第二个参数、`unbindKami()` 的第二个参数、`heartbeat()` 的第二个参数都是**机器码 / statecode**，别传反
+- 每次 `new T3Verify()` 用完必须 `destroy()`；`finalize()` 只是兜底，不要依赖
+
 ## 2. 内置凭证（你的 T3 后台配置，已在 .so 中，不要改动）
 
 | 项 | 值 |
@@ -66,10 +167,11 @@ app/src/main/jniLibs/
 
 ### 3.2 复制 Java 接口类
 
-从仓库 `app/app/src/main/java/com/t3yanzheng/sdk/` 复制以下 12 个类（与 .so 的 JNI 接口一一对应）：
+从仓库 `app/app/src/main/java/com/t3yanzheng/sdk/` 复制以下 13 个类（与 .so 的 JNI 接口一一对应）：
 
 ```
 T3Verify.java         主类（生命周期 + 全部功能方法）
+T3Helper.java         极简封装（verify / heartbeat，可选）
 T3Result.java         通用结果（success / error / msg）
 T3LoginResult.java    登录结果
 T3QueryResult.java    卡密查询结果
@@ -180,9 +282,22 @@ if (r != null && r.success) {
     String err = (r != null && r.error != null) ? r.error : "网络错误";
 }
 
-// 心跳（登录成功后每 60 秒调用一次，返回 false 表示在线状态失效）
+// 心跳（登录成功后每 30 秒调用一次，返回 false 表示在线状态失效）
 T3Result hb = t3.heartbeat(kami, r.statecode);
 if (hb != null && hb.success) { /* 在线 */ }
+```
+
+### 5.3.1 T3Helper（SDK 自带的极简封装，可选）
+
+APK 的 sdk 包里还带一个 `T3Helper`，不想写线程就用它（它内部自建/销毁 `T3Verify`）：
+
+```java
+// 验证卡密：返回 { "1"/"0", 消息, statecode }
+String[] r = T3Helper.verify(kami);
+if ("1".equals(r[0])) { String statecode = r[2]; }
+
+// 心跳：返回 boolean
+boolean alive = T3Helper.heartbeat(kami, statecode);
 ```
 
 ### 5.4 卡密其他功能
@@ -274,54 +389,13 @@ t3.setCode("login", "813B2676E9690C89");
 
 ## 6. 完整示例（登录 → 心跳 → 公告 → 更新 → 解绑）
 
-```java
-public class MyActivity extends Activity {
-    private T3Verify t3;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+见第 1.1 节"APK 实际对接方式"，那是反编译自真实 APK 的完整流程（`LoginActivity` + `MainActivity`），直接照抄即可。核心顺序：
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        t3 = new T3Verify();
-        boolean ok = t3.init();
-
-        executor.execute(() -> {
-            String machine = T3Verify.getMachineCode();
-
-            // 1. 登录
-            T3LoginResult r = t3.login("你的卡密", machine);
-            if (r == null || !r.success) {
-                mainHandler.post(() -> showError(r != null ? r.error : "网络错误"));
-                return;
-            }
-            // 保存 statecode 用于心跳（建议存 SharedPreferences）
-
-            // 2. 心跳（示例只调一次；正式应每 60 秒）
-            T3Result hb = t3.heartbeat("你的卡密", r.statecode);
-
-            // 3. 公告 / 版本 / 更新
-            T3NoticeResult n = t3.getNotice();
-            T3VersionResult ver = t3.getLatestVersion();
-            T3UpdateResult up = t3.checkUpdate(ver.version);
-
-            // 4. 解绑（换设备时需要）
-            T3Result unb = t3.unbindKami("你的卡密", machine);
-
-            mainHandler.post(() -> {
-                // 更新 UI：公告 n.notice / 版本 up.ver / 解绑结果 unb.success
-            });
-        });
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        t3.destroy();
-        executor.shutdown();
-    }
-}
-```
+1. `new T3Verify()` → `init()`（主线程）
+2. 子线程 `T3Verify.getMachineCode()` + `t3.login(kami, machine)`
+3. 登录成功 → 持久化 `statecode`/`end_time`（`SharedPreferences("t3_prefs")`）
+4. 每 **30 秒**子线程 `t3.heartbeat(kami, statecode)`
+5. 功能调用全部放子线程；页面销毁时 `t3.destroy()`
 
 ## 7. 结果对象字段速查
 
