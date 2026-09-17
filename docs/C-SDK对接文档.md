@@ -38,24 +38,21 @@ gcc -O2 -o my_app src/t3sdk.c include/t3sdk.h 你的源码.c -I include
 
 ## 3. 初始化与凭证配置
 
-### 3.1 获取凭证
+### 3.1 凭证
 
-登录 T3 后台（https://www.t3yanzheng.com）获取：
-- **调用码**：`login`（单码登录）、`notice`（公告）、`version`（最新版本）、`heartbeat`（心跳）等，每个功能对应一个调用码
-- **APPKEY**：程序密钥
-- **编码模式**：Base64（自定义字符集）或 RSA（公钥 PEM）
+调用码/APPKEY 使用你的 T3 后台实际值（与仓库 .so 内置配置一致，见"官方C++-SDK对接文档"第 2 节）。示例中直接使用内置值。
 
 ### 3.2 Base64 模式初始化
 
 ```c
 T3Verify t3;
 int ok = t3verify_init(&t3,
-    "登录调用码",    /* login_code    */
-    "公告调用码",    /* notice_code   */
-    "版本调用码",    /* version_code  */
-    "心跳调用码",    /* heartbeat_code*/
-    "APPKEY",        /* appkey        */
-    "自定义Base64字符集");  /* base64_charset */
+    "813B2676E9690C89",    /* login_code    单码登录 */
+    "EC56923E2FD91C99",    /* notice_code   公告 */
+    "EA44543183C3F5D3",    /* version_code  最新版本 */
+    "9AB469F061FA45F4",    /* heartbeat_code 心跳 */
+    "d633f5e27c1b107cd2a1f98870787263",  /* appkey */
+    "你的自定义Base64字符集");  /* base64_charset（与后台一致） */
 if (ok != 0) { /* 初始化失败 */ }
 ```
 
@@ -64,9 +61,12 @@ if (ok != 0) { /* 初始化失败 */ }
 ```c
 T3Verify t3;
 int ok = t3verify_init_rsa(&t3,
-    "登录调用码", "公告调用码", "版本调用码", "心跳调用码",
-    "APPKEY", "-----BEGIN PUBLIC KEY-----\n...-----END PUBLIC KEY-----");
+    "813B2676E9690C89", "EC56923E2FD91C99", "EA44543183C3F5D3", "9AB469F061FA45F4",
+    "d633f5e27c1b107cd2a1f98870787263",
+    "-----BEGIN PUBLIC KEY-----\n...-----END PUBLIC KEY-----");
 ```
+
+> 其余功能调用码与 .so 内置值一致（query/register/user_login/user_heartbeat/qq_login/bind_qq/change_password/user_cancel/recharge/kami_recharge/unbind/ip_unbind/disable/check_update/get_variable/modify_variable/modify_core/get_kami_core/get_user_core/online_kami/online_user/cloud_doc/app_sign/qq_heartbeat/qq_get_variable/qq_get_core/qq_modify_core/qq_unbind/heartbeat_any），完整值见"官方C++-SDK对接文档"第 2 节表格。
 
 ### 3.4 设置新增调用码
 
