@@ -12,7 +12,6 @@
 #include <string>
 #include <cstring>
 #include <cstdlib>
-#include <cstdio>
 #include "t3sdk/t3sdk.h"
 
 /* ============================================================
@@ -81,48 +80,6 @@ static void set_str(JNIEnv *env, jobject obj, const char *cls, const char *field
 
 #define T3_RESULT_CLASS "com/t3yanzheng/sdk/T3Result"
 #define T3_LOGIN_CLASS  "com/t3yanzheng/sdk/T3LoginResult"
-
-/* ============================================================
- * 自动登录（在 .so 内实现，不依赖 Java 业务逻辑）
- *
- * 卡密保存到应用私有目录下的 t3_saved_card.dat 文件中：
- *  - 登录成功时自动写入（nativeLogin 内完成）
- *  - 自动登录时读取并验证，失败自动清除
- *  - 机器码在 .so 内获取，Java 端只需 setStoragePath + autoLogin
- * ============================================================ */
-static std::string g_storage_dir;   /* 应用私有目录，由 Java 端传入 */
-static const char  *kSavedCardFile = "t3_saved_card.dat";
-
-static std::string saved_card_path() {
-    if (g_storage_dir.empty()) return "";
-    return g_storage_dir + "/" + kSavedCardFile;
-}
-
-static void save_card_file(const std::string &kami) {
-    if (g_storage_dir.empty() || kami.empty()) return;
-    FILE *f = fopen(saved_card_path().c_str(), "wb");
-    if (f) {
-        fwrite(kami.data(), 1, kami.size(), f);
-        fclose(f);
-    }
-}
-
-static std::string load_card_file() {
-    if (g_storage_dir.empty()) return "";
-    FILE *f = fopen(saved_card_path().c_str(), "rb");
-    if (!f) return "";
-    std::string s;
-    char buf[256];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) s.append(buf, n);
-    fclose(f);
-    return s;
-}
-
-static void clear_card_file() {
-    if (g_storage_dir.empty()) return;
-    remove(saved_card_path().c_str());
-}
 
 /* ========== 生命周期 ========== */
 
@@ -206,69 +163,9 @@ Java_com_t3yanzheng_sdk_T3Verify_nativeLogin(
     T3Verify *verify = reinterpret_cast<T3Verify *>(handle);
     jobject obj = new_result(env, T3_LOGIN_CLASS);
     if (!verify || !obj) return obj;
-    std::string kami_cpp = jstring_to_cpp(env, kami);
-    T3LoginResult r = verify->login(kami_cpp, jstring_to_cpp(env, imei));
-    /* 登录成功自动保存卡密，供下次自动登录（.so 内完成） */
-    if (r.success) save_card_file(kami_cpp);
+    T3LoginResult r = verify->login(jstring_to_cpp(env, kami), jstring_to_cpp(env, imei));
     set_bool(env, obj, T3_LOGIN_CLASS, "success", r.success);
     set_str (env, obj, T3_LOGIN_CLASS, "error", r.error);
-    set_str (env, obj, T3_LOGIN_CLASS, "kami", kami_cpp);
-    set_str (env, obj, T3_LOGIN_CLASS, "id", r.id);
-    set_str (env, obj, T3_LOGIN_CLASS, "endTime", r.end_time);
-    set_str (env, obj, T3_LOGIN_CLASS, "statecode", r.statecode);
-    set_str (env, obj, T3_LOGIN_CLASS, "recharge", r.recharge);
-    set_str (env, obj, T3_LOGIN_CLASS, "useTime", r.use_time);
-    set_str (env, obj, T3_LOGIN_CLASS, "amount", r.amount);
-    set_str (env, obj, T3_LOGIN_CLASS, "available", r.available);
-    set_str (env, obj, T3_LOGIN_CLASS, "imei", r.imei);
-    set_str (env, obj, T3_LOGIN_CLASS, "change", r.change);
-    set_str (env, obj, T3_LOGIN_CLASS, "core", r.core);
-    return obj;
-}
-
-/* ========== 自动登录（.so 内实现） ========== */
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_t3yanzheng_sdk_T3Verify_nativeSetStoragePath(JNIEnv *env, jobject thiz, jstring path) {
-    g_storage_dir = jstring_to_cpp(env, path);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_t3yanzheng_sdk_T3Verify_nativeSaveCard(JNIEnv *env, jobject thiz, jstring kami) {
-    save_card_file(jstring_to_cpp(env, kami));
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_t3yanzheng_sdk_T3Verify_nativeClearSavedCard(JNIEnv *env, jobject thiz) {
-    clear_card_file();
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_t3yanzheng_sdk_T3Verify_nativeHasSavedCard(JNIEnv *env, jobject thiz) {
-    return load_card_file().empty() ? JNI_FALSE : JNI_TRUE;
-}
-
-extern "C" JNIEXPORT jobject JNICALL
-Java_com_t3yanzheng_sdk_T3Verify_nativeAutoLogin(JNIEnv *env, jobject thiz, jlong handle) {
-    T3Verify *verify = reinterpret_cast<T3Verify *>(handle);
-    jobject obj = new_result(env, T3_LOGIN_CLASS);
-    if (!verify || !obj) return obj;
-
-    std::string card = load_card_file();
-    if (card.empty()) {
-        set_bool(env, obj, T3_LOGIN_CLASS, "success", JNI_FALSE);
-        set_str (env, obj, T3_LOGIN_CLASS, "error", "无已保存的卡密");
-        return obj;
-    }
-
-    /* 机器码在 .so 内获取，Java 无需传参 */
-    T3LoginResult r = verify->login(card, getMachineCode());
-    /* 官方自动登录逻辑：失败时清除保存的卡密，下次手动输入 */
-    if (!r.success) clear_card_file();
-
-    set_bool(env, obj, T3_LOGIN_CLASS, "success", r.success);
-    set_str (env, obj, T3_LOGIN_CLASS, "error", r.error);
-    set_str (env, obj, T3_LOGIN_CLASS, "kami", card);
     set_str (env, obj, T3_LOGIN_CLASS, "id", r.id);
     set_str (env, obj, T3_LOGIN_CLASS, "endTime", r.end_time);
     set_str (env, obj, T3_LOGIN_CLASS, "statecode", r.statecode);

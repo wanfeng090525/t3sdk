@@ -65,20 +65,17 @@ public class LoginActivity extends Activity {
         t3 = new T3Verify();
         final boolean ok = t3.init();
 
-        // 设置卡密存储目录，自动登录在 .so 内完成（读取/验证清卡都在 native 侧）
-        if (ok) {
-            t3.setStoragePath(getFilesDir().getAbsolutePath());
-        }
-
         // 获取机器码
         executor.execute(() -> {
             machineCode = T3Verify.getMachineCode();
             mainHandler.post(() -> {
                 tvMachineCode.setText(TextUtils.isEmpty(machineCode) ? "获取失败" : machineCode);
                 if (!ok) tvError.setText("SDK 初始化失败，请检查 libt3sdk.so");
-                // 自动登录（官方 Fullscreen 示例逻辑，.so 内实现）
-                if (ok && t3.hasSavedCard()) {
-                    tryNativeAutoLogin();
+                // 自动登录（官方 Fullscreen 示例逻辑：读取本地保存卡密自动验证）
+                String savedKami = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .getString(KEY_KAMI, "");
+                if (ok && !TextUtils.isEmpty(savedKami) && !TextUtils.isEmpty(machineCode)) {
+                    tryAutoLogin(savedKami);
                 }
             });
         });
@@ -98,9 +95,9 @@ public class LoginActivity extends Activity {
         findViewById(R.id.rowUnbind).setOnClickListener(v -> confirmUnbind());
     }
 
-    // ========== 自动登录（官方 Fullscreen 示例逻辑，在 .so 内实现） ==========
+    // ========== 自动登录（官方 Fullscreen 示例逻辑） ==========
 
-    private void tryNativeAutoLogin() {
+    private void tryAutoLogin(final String kami) {
         final AlertDialog loading = new AlertDialog.Builder(this)
                 .setMessage("正在自动登录...")
                 .setCancelable(false)
@@ -109,20 +106,19 @@ public class LoginActivity extends Activity {
         btnLogin.setEnabled(false);
 
         executor.execute(() -> {
-            // 读取/验证/失败清卡全部由 .so 完成，Java 只拿结果
-            final T3LoginResult r = t3.autoLogin();
+            final T3LoginResult r = t3.login(kami, machineCode);
             mainHandler.post(() -> {
                 loading.dismiss();
                 if (r != null && r.success) {
-                    // 自动登录成功，直接进入主界面（r.kami 由 .so 回填）
-                    saveLogin(r.kami, r);
+                    // 自动登录成功，直接进入主界面
+                    saveLogin(kami, r);
                     Intent intent = new Intent(LoginActivity.this, MainActivity.class);
                     intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     startActivity(intent);
                     finish();
                 } else {
-                    // 自动登录失败（.so 已清除保存的卡密），转手动输入
-                    clearSavedState();
+                    // 自动登录失败：清除保存的卡密，转手动输入
+                    clearSavedKami();
                     showError(r != null && !TextUtils.isEmpty(r.error) ? r.error : "自动登录失败");
                     btnLogin.setEnabled(true);
                 }
@@ -130,8 +126,9 @@ public class LoginActivity extends Activity {
         });
     }
 
-    private void clearSavedState() {
+    private void clearSavedKami() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .remove(KEY_KAMI)
                 .remove(KEY_STATECODE)
                 .remove(KEY_END_TIME)
                 .apply();
@@ -227,8 +224,6 @@ public class LoginActivity extends Activity {
                 T3Result r = t3.unbindKami(kami, machineCode);
                 mainHandler.post(() -> {
                     if (r != null && r.success) {
-                        // 解绑成功后清除 .so 内保存的卡密，不再自动登录
-                        t3.clearSavedCard();
                         showError("");
                         Toast.makeText(this, "解绑成功", Toast.LENGTH_SHORT).show();
                     } else {

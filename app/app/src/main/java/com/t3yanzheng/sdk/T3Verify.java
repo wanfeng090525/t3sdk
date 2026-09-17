@@ -270,43 +270,6 @@ public class T3Verify {
         return nativeHeartbeatAny(nativeHandle, statecode);
     }
 
-    /* ========== 自动登录（.so 内实现） ========== */
-
-    /**
-     * 设置卡密存储目录（应用私有目录，如 context.getFilesDir().getAbsolutePath()）
-     * 必须在使用自动登录前调用。
-     */
-    public void setStoragePath(String path) {
-        nativeSetStoragePath(nativeHandle, path);
-    }
-
-    /**
-     * 手动保存卡密（一般无需调用，login 成功时 native 已自动保存）
-     */
-    public void saveCard(String kami) {
-        nativeSaveCard(nativeHandle, kami);
-    }
-
-    /** 清除本地保存的卡密 */
-    public void clearSavedCard() {
-        nativeClearSavedCard(nativeHandle);
-    }
-
-    /** 是否已保存卡密（可作为启动是否自动登录的判断） */
-    public boolean hasSavedCard() {
-        return nativeHasSavedCard(nativeHandle);
-    }
-
-    /**
-     * 自动登录（官方 Fullscreen 示例逻辑，全部在 .so 内完成）：
-     * - 读取本地保存的卡密，机器码在 .so 内获取
-     * - 验证成功返回成功结果
-     * - 失败自动清除保存的卡密，转手动输入
-     */
-    public T3LoginResult autoLogin() {
-        return nativeAutoLogin(nativeHandle);
-    }
-
     /* ========== 生命周期 ========== */
 
     /**
@@ -331,14 +294,6 @@ public class T3Verify {
     private native void nativeDestroy(long handle);
     private native boolean nativeInit(long handle);
     private native void nativeSetCode(long handle, String field, String code);
-
-    // ===== 自动登录（.so 内实现：卡密存储/机器码获取/验证都在 native 侧） =====
-    private native void nativeSetStoragePath(long handle, String path);
-    private native void nativeSaveCard(long handle, String kami);
-    private native void nativeClearSavedCard(long handle);
-    private native boolean nativeHasSavedCard(long handle);
-    private native T3LoginResult nativeAutoLogin(long handle);
-
     private native T3LoginResult nativeLogin(long handle, String kami, String imei);
     private native T3QueryResult nativeQueryKami(long handle, String kami);
     private native T3Result nativeHeartbeat(long handle, String kami, String statecode);
